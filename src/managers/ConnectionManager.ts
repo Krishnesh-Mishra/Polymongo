@@ -2,7 +2,8 @@
 import mongoose, { Connection } from 'mongoose';
 import { MetadataManager } from './MetadataManager';
 import { EvictionManager } from './EvictionManager';
-import { PolyMongoConfig, ConnectionStats } from '../types';
+import { PolyMongoConfig, ConnectionStats, ConnectionMetadata } from '../types';
+import { buildURI } from '../utils/uri';
 
 export class ConnectionManager {
   private connections: Map<string, Connection> = new Map();
@@ -11,29 +12,49 @@ export class ConnectionManager {
   constructor(
     private config: PolyMongoConfig,
     private metadataManager: MetadataManager,
-    private evictionManager: EvictionManager
   ) {}
 
-  async getConnection(dbName: string): Promise<Connection> {
+  setEvictionManager(evictionManager: EvictionManager) {
+    this.evictionManager = evictionManager;
+  }
+
+  private evictionManager?: EvictionManager;
+
+  getConnection(dbName: string): Connection {
     if (!this.connections.has(dbName)) {
-      await this.openConnection(dbName);
+      this.openConnection(dbName);
     }
     return this.connections.get(dbName)!;
   }
 
-  async openConnection(dbName: string): Promise<Connection> {
+  openConnection(dbName: string): Connection {
     if (this.connections.has(dbName)) return this.connections.get(dbName)!;
     if (this.config.maxConnections && this.connections.size >= this.config.maxConnections) {
-      const evicted = await this.evictionManager.evictIfPossible();
-      if (!evicted) {
-        console.warn('Max connections reached, temporarily exceeding for priority or watch');
+      const evicted = this.evictionManager?.evictIfPossible();
+      if (!evicted && !this.canExceedLimit(dbName)) {
+        console.warn('Max connections reached');
       }
     }
-    const uri = `${this.config.mongoURI}/${dbName}`;
-    const conn = await mongoose.createConnection(uri).asPromise();
+    const uri = buildURI(this.config.mongoURI, dbName);
+    const conn = mongoose.createConnection(uri, {
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 60000,
+    });
     this.connections.set(dbName, conn);
-    const meta = await this.metadataManager.loadMetadata(dbName);
-    this.stats.set(dbName, { ...meta, idleTime: 0, hasWatch: false });
+    const defaultMeta: ConnectionMetadata = {
+      dbName,
+      priority: 100,
+      useCount: 0,
+      avgInterval: 0,
+      lastUsed: Date.now(),
+    };
+    this.stats.set(dbName, { ...defaultMeta, idleTime: 0, hasWatch: false });
+    this.metadataManager.loadMetadata(dbName).then(meta => {
+      const stat = this.stats.get(dbName);
+      if (stat) {
+        Object.assign(stat, meta);
+      }
+    }).catch((err: unknown) => console.error(err));
     return conn;
   }
 
@@ -47,7 +68,7 @@ export class ConnectionManager {
     }
   }
 
-  async useConnection(dbName: string): Promise<void> {
+  useConnection(dbName: string): void {
     const now = Date.now();
     const stat = this.stats.get(dbName);
     if (stat) {
@@ -56,7 +77,7 @@ export class ConnectionManager {
       stat.avgInterval = ((stat.avgInterval * (stat.useCount - 1)) + interval) / stat.useCount;
       stat.lastUsed = now;
       stat.idleTime = 0;
-      await this.metadataManager.saveMetadata(stat);
+      this.metadataManager.saveMetadata(stat).catch((err: unknown) => console.error(err));
     }
   }
 
@@ -72,6 +93,11 @@ export class ConnectionManager {
       ...stat,
       idleTime: now - stat.lastUsed,
     }));
+  }
+
+  private canExceedLimit(dbName: string): boolean {
+    const stat = this.stats.get(dbName);
+    return stat ? stat.priority === -1 || stat.hasWatch : false;
   }
 
   async destroy(): Promise<void> {

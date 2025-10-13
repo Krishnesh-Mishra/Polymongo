@@ -1,6 +1,7 @@
 // src/managers/MetadataManager.ts
 import mongoose, { Connection, Schema, Document } from 'mongoose';
 import { ConnectionMetadata } from '../types';
+import { buildURI } from '../utils/uri';
 
 interface MetadataDocument extends Document, ConnectionMetadata {}
 
@@ -10,14 +11,18 @@ const metadataSchema = new Schema<MetadataDocument>({
   useCount: { type: Number, default: 0 },
   avgInterval: { type: Number, default: 0 },
   lastUsed: { type: Number, default: Date.now },
-});
+}, { versionKey: false });
 
 export class MetadataManager {
   private connection: Connection;
   private MetadataModel;
 
   constructor(mongoURI: string, metadataDB: string) {
-    this.connection = mongoose.createConnection(`${mongoURI}/${metadataDB}`);
+    const uri = buildURI(mongoURI, metadataDB);
+    this.connection = mongoose.createConnection(uri, {
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 60000,
+    });
     this.MetadataModel = this.connection.model<MetadataDocument>('ConnectionMetadata', metadataSchema);
   }
 
@@ -31,7 +36,9 @@ export class MetadataManager {
   }
 
   async saveMetadata(meta: ConnectionMetadata): Promise<void> {
-    await this.MetadataModel.updateOne({ dbName: meta.dbName }, meta, { upsert: true });
+    const { dbName, priority, useCount, avgInterval, lastUsed } = meta;
+    const updateData = { dbName, priority, useCount, avgInterval, lastUsed };
+    await this.MetadataModel.updateOne({ dbName: meta.dbName }, updateData, { upsert: true });
   }
 
   async setPriority(dbName: string, priority: number): Promise<void> {

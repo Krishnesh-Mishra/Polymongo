@@ -25,9 +25,9 @@ class PolyMongo implements IWrapper {
       throw new Error('mongoURI is required');
     }
     this.metadataManager = new MetadataManager(this.config.mongoURI, this.config.metadataDB!);
-    this.connectionManager = new ConnectionManager(this.config, this.metadataManager, null as any); // Temp
+    this.connectionManager = new ConnectionManager(this.config, this.metadataManager);
     this.evictionManager = new EvictionManager(this.connectionManager, this.config.idleTimeout!);
-    this.connectionManager['evictionManager'] = this.evictionManager; // Patch
+    this.connectionManager.setEvictionManager(this.evictionManager);
   }
 
   static createWrapper(config: PolyMongoConfig): PolyMongo {
