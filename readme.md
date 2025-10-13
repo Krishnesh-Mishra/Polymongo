@@ -41,11 +41,9 @@ const PolyMongo = require('polymongo');
 const mongoose = require('mongoose');
 
 // 1. Create wrapper
-const wrapper = PolyMongo.createWrapper({
+const wrapper = new PolyMongo.createWrapper({
   mongoURI: 'mongodb://localhost:27017',
-  maxConnections: 100,        // Optional: limit concurrent connections
-  idleTimeout: 600000,        // Optional: close after 10min idle (default)
-  metadataDB: 'polymongo-meta' // Optional: metadata storage
+  poolSize: 10,
 });
 
 // 2. Define your schema once
@@ -108,11 +106,6 @@ const stats = await User.db('tenant-1').aggregate([
   { $group: { _id: '$country', count: { $sum: 1 } } }
 ]);
 
-// Transactions
-const session = await User.db('tenant-1').startSession();
-await session.withTransaction(async () => {
-  await User.db('tenant-1').create([{ name: 'Alice' }], { session });
-});
 ```
 
 ### Change Streams (Never Evicted)
@@ -129,54 +122,7 @@ changeStream.on('change', (change) => {
 // Even if maxConnections is reached
 ```
 
-### Priority Management
 
-```javascript
-// Set high priority for critical databases
-await wrapper.setPriority('production-main', -1); // Never evict
-await wrapper.setPriority('analytics', 5);      // High priority
-await wrapper.setPriority('archives', 150);        // Low priority (evict first)
-
-// Priority affects eviction decisions:
-// -1: Never evicted (reserved for critical DBs)
-// Lower numbers = higher priority = evicted last
-```
-
-### Connection Statistics
-
-```javascript
-const stats = wrapper.stats();
-// Returns detailed metrics for each connection:
-[
-  {
-    dbName: 'tenant-acme',
-    priority: 100,
-    useCount: 450,           // Total operations
-    avgInterval: 5000,       // Avg ms between operations
-    lastUsed: 1697123456789, // Timestamp
-    idleTime: 30000,         // Current idle time (ms)
-    hasWatch: false,         // Change stream active?
-    score: 85.3              // Eviction score (higher = keep)
-  }
-]
-```
-
-### Manual Connection Control
-
-```javascript
-// Pre-open connections (useful for warmup)
-await wrapper.openConnection('frequently-used-db');
-
-// Manually close when done
-await wrapper.closeConnection('rarely-used-db');
-
-// Clean shutdown
-await wrapper.destroy();
-```
-
----
-
-## 🎯 Advanced Usage
 
 ### Express Multi-Tenant API
 
@@ -226,137 +172,18 @@ io.on('connection', (socket) => {
 });
 ```
 
-### Dynamic Schema Per Tenant
-
-```javascript
-// Different models for different databases
-const createTenantModel = (tenantId) => {
-  const schema = new mongoose.Schema({
-    name: String,
-    // Add tenant-specific fields
-    customFields: tenantConfig[tenantId].fields
-  });
-  
-  return wrapper.wrapModel(
-    mongoose.model(`User_${tenantId}`, schema)
-  );
-};
-```
-
-### Health Monitoring
-
-```javascript
-// Monitor connection health
-setInterval(() => {
-  const stats = wrapper.stats();
-  
-  stats.forEach(stat => {
-    if (stat.idleTime > 300000) { // 5 min idle
-      console.warn(`Database ${stat.dbName} has been idle`);
-    }
-    
-    if (stat.useCount > 10000) {
-      console.log(`High usage: ${stat.dbName} - ${stat.useCount} ops`);
-    }
-  });
-}, 60000);
-```
 
 ---
 
-## 🔧 Configuration
-
-```typescript
-interface PolyMongoConfig {
-  mongoURI: string;           // Required: Base MongoDB connection string
-  maxConnections?: number;    // Optional: Max concurrent connections (default: unlimited)
-  idleTimeout?: number;       // Optional: Close idle connections after ms (default: 600000)
-  metadataDB?: string;        // Optional: DB for storing metadata (default: 'polymongo-metadata')
-  defaultDB?: string;         // Optional: Default database name (default: 'Default-DB')
-}
-```
 
 ### Configuration Examples
 
 ```javascript
-// Minimal setup
-const wrapper = PolyMongo.createWrapper({
-  mongoURI: 'mongodb://localhost:27017'
-});
-
-// Production setup
-const wrapper = PolyMongo.createWrapper({
-  mongoURI: 'mongodb://user:pass@cluster.mongodb.net',
-  maxConnections: 50,      // Limit to 50 concurrent DBs
-  idleTimeout: 300000,     // Close after 5min idle
-  metadataDB: 'app-meta',  // Custom metadata location
-  defaultDB: 'app-default' // Default DB for .db() without args
-});
-
 // Replica set (for change streams)
 const wrapper = PolyMongo.createWrapper({
   mongoURI: 'mongodb://localhost:27017?replicaSet=rs0'
 });
 ```
-
----
-
-## 📊 How It Works
-
-### Smart Eviction Algorithm
-
-When `maxConnections` is reached, PolyMongo calculates a **score** for each connection:
-
-```
-score = (useCount × 10 / avgInterval) - (idleTime × 0.001) + (-priority)
-```
-
-- **Higher useCount** = Higher score (keep busy connections)
-- **Lower avgInterval** = Higher score (keep frequently used)
-- **Higher idleTime** = Lower score (evict idle first)
-- **Higher priority** = Higher score (evict low priority first)
-
-**Protected connections** (never evicted):
-- Priority set to `-1`
-- Active change streams (`hasWatch: true`)
-
-### Connection Lifecycle
-
-```
-┌─────────────────┐
-│  First Access   │
-│  User.db('X')   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐      ┌──────────────┐
-│ Create Conn     │─────▶│ Store Stats  │
-│ Store Metadata  │      │ Start Timer  │
-└────────┬────────┘      └──────────────┘
-         │
-         ▼
-┌─────────────────┐      ┌──────────────┐
-│ Operations...   │─────▶│ Update Stats │
-│ find/create/etc │      │ Reset Idle   │
-└────────┬────────┘      └──────────────┘
-         │
-         ▼
-┌─────────────────┐      ┌──────────────┐
-│ Idle Timeout    │─────▶│ Auto Close   │
-│ OR Max Reached  │      │ Free Memory  │
-└─────────────────┘      └──────────────┘
-```
-
----
-
-## 🚀 Performance Tips
-
-1. **Set appropriate `maxConnections`** - Balance memory vs availability
-2. **Use priority for critical databases** - Prevent important connections from closing
-3. **Tune `idleTimeout`** - Shorter = less memory, but more reconnections
-4. **Monitor stats regularly** - Identify usage patterns and optimize
-5. **Pre-open hot databases** - Use `openConnection()` during startup
-6. **Close when done** - Call `destroy()` on app shutdown
 
 ---
 
@@ -423,26 +250,6 @@ const dbName = experiment.group === 'A' ? 'experiment-a' : 'experiment-b';
 await User.db(dbName).create(userData);
 ```
 
----
-
-## 🐛 Troubleshooting
-
-### Connection errors?
-- Ensure MongoDB is running and accessible
-- Check `mongoURI` format: `mongodb://host:port`
-- For change streams, use replica set: `?replicaSet=rs0`
-
-### Memory issues?
-- Set `maxConnections` lower
-- Reduce `idleTimeout` for faster cleanup
-- Check stats to identify problematic databases
-
-### Connections not closing?
-- Verify no active change streams
-- Check priority settings (avoid too many `-1`)
-- Ensure operations complete (no hanging queries)
-
----
 
 ## 📚 API Reference
 
@@ -451,24 +258,6 @@ Creates a new PolyMongo instance.
 
 ### `wrapper.wrapModel(model)`
 Wraps a Mongoose model for multi-database use.
-
-### `Model.db(dbName)`
-Returns model instance for specified database.
-
-### `wrapper.stats()`
-Returns array of connection statistics.
-
-### `wrapper.setPriority(dbName, priority)`
-Sets eviction priority for a database.
-
-### `wrapper.openConnection(dbName)`
-Manually opens a connection.
-
-### `wrapper.closeConnection(dbName)`
-Manually closes a connection.
-
-### `wrapper.destroy()`
-Closes all connections and cleans up.
 
 ---
 
@@ -486,13 +275,13 @@ Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md)
 
 ## 📝 License
 
-MIT © [Your Name]
+MIT © [Krishnesh Mishra]
 
 ---
 
 ## 🌟 Show Your Support
 
-If PolyMongo helps your project, give it a ⭐️ on [GitHub](https://github.com/yourusername/polymongo)!
+If PolyMongo helps your project, give it a ⭐️ on [GitHub](https://github.com/krishnesh-mishra/polymongo)!
 
 ---
 
@@ -500,8 +289,8 @@ If PolyMongo helps your project, give it a ⭐️ on [GitHub](https://github.com
 
 - [Documentation](https://polymongo.dev/docs)
 - [NPM Package](https://www.npmjs.com/package/polymongo)
-- [GitHub Repository](https://github.com/yourusername/polymongo)
-- [Issue Tracker](https://github.com/yourusername/polymongo/issues)
+- [GitHub Repository](https://github.com/krishnesh-mishra/polymongo)
+- [Issue Tracker](https://github.com/krishnesh-mishra/polymongo/issues)
 - [Changelog](CHANGELOG.md)
 
 ---

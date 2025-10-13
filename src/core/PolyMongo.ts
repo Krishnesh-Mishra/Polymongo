@@ -1,66 +1,74 @@
-// src/core/PolyMongo.ts
-import { Model, Document, Connection } from 'mongoose';
-import { PolyMongoConfig, ConnectionStats } from '../types';
-import { IWrapper, WrappedModel } from '../interfaces';
-import { MetadataManager } from '../managers/MetadataManager';
-import { ConnectionManager } from '../managers/ConnectionManager';
-import { EvictionManager } from '../managers/EvictionManager';
-import createWrappedModel from '../models/WrapperModel';
+// src/core/polymongo.ts
+import * as mongoose from 'mongoose';
+import { PolyMongoOptions, WrappedModel } from '../types';
 
-const DEFAULT_CONFIG: Partial<PolyMongoConfig> = {
-  metadataDB: 'polymongo-metadata',
-  defaultDB: 'Default-DB',
-  idleTimeout: 600000,
-};
+/**
+ * Wrapper class for managing multiple MongoDB connections with Mongoose.
+ */
+class PolyMongoWrapper {
+  private mongoURI: string;
+  private poolSize: number;
+  private primary: mongoose.Connection | null = null;
+  private connections: Map<string, mongoose.Connection> = new Map();
 
-class PolyMongo implements IWrapper {
-  public config: PolyMongoConfig;
-  private metadataManager: MetadataManager;
-  public connectionManager: ConnectionManager;
-  private evictionManager: EvictionManager;
+  /**
+   * Constructor for the wrapper.
+   * @param options - Configuration options including mongoURI and optional poolSize.
+   */
+  constructor(options: PolyMongoOptions) {
+    this.mongoURI = options.mongoURI;
+    this.poolSize = options.poolSize ?? 10;
+  }
 
-  constructor(config: PolyMongoConfig) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
-    if (!this.config.mongoURI) {
-      throw new Error('mongoURI is required');
+  /**
+   * Initializes the primary connection if not already created.
+   * @returns The primary mongoose connection.
+   */
+  private _initPrimary(): mongoose.Connection {
+    if (!this.primary) {
+      this.primary = mongoose.createConnection(this.mongoURI, {
+        maxPoolSize: this.poolSize,
+      });
     }
-    this.metadataManager = new MetadataManager(this.config.mongoURI, this.config.metadataDB!);
-    this.connectionManager = new ConnectionManager(this.config, this.metadataManager);
-    this.evictionManager = new EvictionManager(this.connectionManager, this.config.idleTimeout!);
-    this.connectionManager.setEvictionManager(this.evictionManager);
+    return this.primary;
   }
 
-  static createWrapper(config: PolyMongoConfig): PolyMongo {
-    return new PolyMongo(config);
+  /**
+   * Gets or creates a connection for the specified database.
+   * @param dbName - The database name (default: 'default').
+   * @returns The mongoose connection for the database.
+   */
+  private _getConnection(dbName: string = 'default'): mongoose.Connection {
+    if (this.connections.has(dbName)) {
+      return this.connections.get(dbName)!;
+    }
+    const primary = this._initPrimary();
+    const conn = primary.useDb(dbName, { useCache: true });
+    this.connections.set(dbName, conn);
+    return conn;
   }
 
-  wrapModel<T extends Document>(model: Model<T>): WrappedModel<T> {
-    return createWrappedModel<T>(this, model.schema, model.modelName);
-  }
-
-  stats(): ConnectionStats[] {
-    return this.connectionManager.getStats();
-  }
-
-  async setPriority(dbName: string, priority: number): Promise<void> {
-    await this.metadataManager.setPriority(dbName, priority);
-    const stat = this.stats().find(s => s.dbName === dbName);
-    if (stat) stat.priority = priority;
-  }
-
-  async openConnection(dbName: string): Promise<Connection> {
-    return this.connectionManager.openConnection(dbName);
-  }
-
-  async closeConnection(dbName: string): Promise<void> {
-    await this.connectionManager.closeConnection(dbName);
-  }
- 
-  async destroy(): Promise<void> {
-    this.evictionManager.destroy();
-    await this.connectionManager.destroy();
-    await this.metadataManager.destroy();
+  /**
+   * Wraps a base Mongoose model to support multiple databases.
+   * @param baseModel - The base Mongoose model to wrap.
+   * @returns An object with a db method to get model instances per database.
+   */
+  wrapModel<T extends mongoose.Document>(baseModel: mongoose.Model<T>): WrappedModel<T> {
+    const wrapper = this;
+    return {
+      db(dbName: string = 'default'): mongoose.Model<T> {
+        const conn = wrapper._getConnection(dbName);
+        return conn.model<T>(baseModel.modelName, baseModel.schema);
+      },
+    };
   }
 }
+
+/**
+ * PolyMongo object providing the wrapper class.
+ */
+const PolyMongo = {
+  createWrapper: PolyMongoWrapper
+};
 
 export default PolyMongo;

@@ -1,6 +1,6 @@
 {
   "name": "polymongo",
-  "version": "1.0.0",
+  "version": "0.20.0",
   "description": "Adaptive Multi-Database Wrapper for Mongoose with automatic connection management",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,6 +12,7 @@
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts"
   },
+  "files": ["dist"],
   "keywords": [
     "mongoose",
     "mongodb",

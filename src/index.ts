@@ -1,4 +1,3 @@
-// src/index.ts
-import PolyMongo from './core/PolyMongo';
+import  PolyMongo  from './core/PolyMongo';
 
-export = PolyMongo;
+export = PolyMongo ;

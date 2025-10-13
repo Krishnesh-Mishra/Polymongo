@@ -6,9 +6,17 @@ const PolyMongo = require('../dist/index.js');
 const app = express();
 app.use(express.json());
 
+// Create wrapper with single MongoClient
+const wrapper = new PolyMongo.createWrapper({
+  mongoURI: 'mongodb://localhost:27017',
+  poolSize: 10,
+});
 
-//Create Wrapper Instance using PolyMongo
- 
+// Define schema and wrap model
+const userSchema = new mongoose.Schema({ name: String });
+const User = wrapper.wrapModel(mongoose.model('User', userSchema));
+
+
 /* 
 For Production:
     Models/index.js
@@ -38,50 +46,33 @@ For Production:
     -------------------
     module.exports = { WrappedUser, WrappedProduct };
 
+
+    This Way you can easily adapt your existing mongoose models to use multiple databases with minimal changes.
 */
-const wrapper = PolyMongo.createWrapper({ mongoURI: 'mongodb://localhost:27017?replicaSet=rs0' , });
-
-
-//Define Mongoose Schema & Model
-const userSchema = new mongoose.Schema({ name: String });
-//Wrap Model
-const User = wrapper.wrapModel(mongoose.model('User', userSchema));
 
 
 
-//Add User to Specific DB
-app.post('/add-user', async (req, res) => {
-    const { name, db = 'default' } = req.body;
-    await User.db(db).create({ name });
-    res.send('User added');
-});
-
-
-
-//Normal Mongoose Query
+// Query from specific database
 app.get('/users', async (req, res) => {
-    const { db } = req.body;
-    const users = await User.db(db).find().limit(2).sort({ name: 1 }).lean();
-    res.json(users);
+  const { db } = req.body;
+  const users = await User.db(db).find().limit(20).sort({ name: -1 }).lean();
+  res.json(users);
 });
 
 
-
-//Get Stats
-app.get('/stats', (req, res) => {
-    res.json(wrapper.connectionManager.getStats());
+// Add user to specific database
+app.post('/add-user', async (req, res) => {
+  const { name, db = 'default' } = req.body;
+  await User.db(db).create({ name });
+  res.send('User added');
 });
 
-
-
-
-
-//Streams Supported
-app.get('/watch/sm', (req, res) => {
+// Watch changes (connection stays open)
+app.get('/watch/:db', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
 
-  const changeStream = User.db('sm').watch();
+  const changeStream = User.db(req.params.db).watch();
 
   changeStream.on('change', change => {
     res.write(`data: ${JSON.stringify(change)}\n\n`);

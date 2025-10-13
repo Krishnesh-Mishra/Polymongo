@@ -1,22 +1,17 @@
 // src/types/index.ts
-export interface PolyMongoConfig {
+import * as mongoose from 'mongoose';
+
+/**
+ * Options for initializing the wrapper.
+ */
+export interface PolyMongoOptions {
   mongoURI: string;
-  metadataDB?: string;
-  maxConnections?: number;
-  defaultDB?: string;
-  idleTimeout?: number;
+  poolSize?: number;
 }
 
-export interface ConnectionMetadata {
-  dbName: string;
-  priority: number;
-  useCount: number;
-  avgInterval: number;
-  lastUsed: number;
-}
-
-export interface ConnectionStats extends ConnectionMetadata {
-  idleTime: number;
-  hasWatch: boolean;
-  score?: number;
+/**
+ * Wrapped model interface with db method.
+ */
+export interface WrappedModel<T extends mongoose.Document> {
+  db: (dbName?: string) => mongoose.Model<T>;
 }
