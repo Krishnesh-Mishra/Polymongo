@@ -10,6 +10,10 @@ app.use(express.json());
 const wrapper = new PolyMongo.createWrapper({
   mongoURI: 'mongodb://localhost:27017',
   poolSize: 10,
+  minFreeConnections: 1,
+  maxPoolSize: 1,
+  idleTimeoutMS:30000,
+  debug:true
 });
 
 // Define schema and wrap model
@@ -55,8 +59,14 @@ For Production:
 // Query from specific database
 app.get('/users', async (req, res) => {
   const { db } = req.body;
+  for (let i = 0; i < 1000; i++) {
+    await User.db(`test-${i}`).find()
+  }
   const users = await User.db(db).find().limit(20).sort({ name: -1 }).lean();
   res.json(users);
+});
+app.get('/stats', async (req, res) => {
+  res.json(wrapper.stats());
 });
 
 
