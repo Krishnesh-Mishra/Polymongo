@@ -384,7 +384,7 @@ app.use((req, res, next) => {
   req.db = User.db(req.customer.id);
   next();
 });
-```
+``` 
 
 ### Multi-Region
 ```javascript

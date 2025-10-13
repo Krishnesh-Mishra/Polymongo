@@ -55,7 +55,7 @@ class PolyMongo implements IWrapper {
   async closeConnection(dbName: string): Promise<void> {
     await this.connectionManager.closeConnection(dbName);
   }
-
+ 
   async destroy(): Promise<void> {
     this.evictionManager.destroy();
     await this.connectionManager.destroy();
