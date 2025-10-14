@@ -806,13 +806,13 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 🐛 Issues
 
-Found a bug? [Open an issue](https://github.com/yourusername/polymongo/issues)
+Found a bug? [Open an issue](https://github.com/krishnesh-mishra/polymongo/issues)
 
 ---
 
 ## 🙏 Acknowledgments
 
-Built with ❤️ using [Mongoose](https://mongoosejs.com/) and [Winston](https://github.com/winstonjs/winston).
+Built underhood with ❤️ using [Mongoose](https://mongoosejs.com/) and [Winston](https://github.com/winstonjs/winston).
 
 ---
 
