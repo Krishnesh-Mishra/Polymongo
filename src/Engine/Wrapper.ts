@@ -126,7 +126,7 @@ export class PolyMongoWrapper {
     }
 
     return {
-      db: (dbName: string = this.defaultDB): mongoose.Model<T> => {
+      db: (dbName: string = 'default'): mongoose.Model<T> => {
         try {
           wrapper.logManager.log(
             `Accessing model ${baseModel.modelName} for database: ${dbName}`,
