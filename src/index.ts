@@ -1,3 +1,2 @@
-import  {PolyMongo}  from './core/PolyMongo';
-
-export = PolyMongo ;
+import { PolyMongo } from "./core/PolyMongo";
+export = PolyMongo;

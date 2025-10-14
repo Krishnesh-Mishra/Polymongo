@@ -1,5 +1,5 @@
 // src/types/index.ts
-import * as mongoose from 'mongoose';
+import * as mongoose from "mongoose";
 
 /**
  * Options for initializing the wrapper.
@@ -10,6 +10,8 @@ export interface PolyMongoOptions {
   minFreeConnections?: number;
   idleTimeoutMS?: number;
   debug?: boolean;
+  logPath?: string;
+  coldStart?: boolean;
 }
 
 /**
