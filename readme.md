@@ -1,8 +1,10 @@
 # PolyMongo
 
-**The intelligent multi-database connection manager for MongoDB and Mongoose.**
+**The intelligent multi-database connection manager for MongoDB and Mongoose .**
 
 PolyMongo enables seamless database multiplexing with a single connection pool, perfect for multi-tenant applications, microservices, and dynamic database architectures. Stop managing multiple connection instances—let PolyMongo handle it all.
+
+It Uses Single TCP Connection (optionally multiple) For Multiple Databse & Very PERFORMANCE & DX CENTRIC.
 
 ---
 
@@ -14,6 +16,7 @@ PolyMongo enables seamless database multiplexing with a single connection pool, 
 - **🛡️ Production Ready** - Graceful shutdown, reconnection logic, and error handling
 - **🔍 Debug Mode** - Comprehensive logging with Winston integration
 - **⚡ Cold Start Support** - Defer connection initialization until first query
+- **🔌 Connection Warm-Up** - Always keep N number of free connection so that Query gets Resolved Quickly
 - **🚀 Serverless Optimized** - No manual `connect()` in routes—Next.js, Vercel Edge, Lambda ready
 - **📈 Connection Stats** - Monitor active connections and pool statistics
 - **🎭 Zero Configuration** - Works out of the box with sensible defaults
@@ -78,7 +81,7 @@ import { User } from '@/lib/db';
 
 export async function GET() {
   // ✅ Just query - no connect() needed!
-  const users = await User.db('default').find().lean();
+  const users = await User.find();
   return Response.json(users);
 }
 ```

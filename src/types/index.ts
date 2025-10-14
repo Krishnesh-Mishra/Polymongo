@@ -12,6 +12,7 @@ export interface PolyMongoOptions {
   debug?: boolean;
   logPath?: string;
   coldStart?: boolean;
+  defaultDB?: string;
 }
 
 /**
