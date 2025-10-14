@@ -59,9 +59,6 @@ For Production:
 // Query from specific database
 app.get('/users', async (req, res) => {
   const { db } = req.body;
-  for (let i = 0; i < 1000; i++) {
-    await User.db(`test-${i}`).find()
-  }
   const users = await User.db(db).find().limit(20).sort({ name: -1 }).lean();
   res.json(users);
 });

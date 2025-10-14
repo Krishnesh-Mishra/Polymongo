@@ -13,6 +13,7 @@ class PolyMongoWrapper {
   private debug: boolean;
   private primary: mongoose.Connection | null = null;
   private connections: Map<string, mongoose.Connection> = new Map();
+  private watchConnections: Set<string> = new Set();
 
   /**
    * Constructor for the wrapper.
@@ -44,7 +45,7 @@ class PolyMongoWrapper {
     if (!this.primary) {
       this._log(`Initializing primary connection to ${this.mongoURI}`);
       this.primary = mongoose.createConnection(this.mongoURI, {
-        maxPoolSize: this.maxPoolSize,
+        maxPoolSize: this.maxPoolSize + 1, // +1 reserved for queries
         minPoolSize: this.minFreeConnections,
         maxIdleTimeMS: this.idleTimeoutMS,
       });
@@ -88,6 +89,24 @@ class PolyMongoWrapper {
   }
 
   /**
+   * Marks a database as having an active watch stream.
+   * @param dbName - The database name.
+   */
+  private _markWatch(dbName: string): void {
+    this.watchConnections.add(dbName);
+    this._log(`Watch stream started for database: ${dbName} (total watches: ${this.watchConnections.size})`);
+  }
+
+  /**
+   * Unmarks a database watch stream.
+   * @param dbName - The database name.
+   */
+  private _unmarkWatch(dbName: string): void {
+    this.watchConnections.delete(dbName);
+    this._log(`Watch stream closed for database: ${dbName} (total watches: ${this.watchConnections.size})`);
+  }
+
+  /**
    * Wraps a base Mongoose model to support multiple databases.
    * @param baseModel - The base Mongoose model to wrap.
    * @returns An object with a db method to get model instances per database.
@@ -98,7 +117,26 @@ class PolyMongoWrapper {
       db: (dbName: string = 'default'): mongoose.Model<T> => {
         wrapper._log(`Accessing model ${baseModel.modelName} for database: ${dbName}`);
         const conn = wrapper._getConnection(dbName);
-        return conn.model<T>(baseModel.modelName, baseModel.schema);
+        const model = conn.model<T>(baseModel.modelName, baseModel.schema);
+
+        // Wrap watch() to track watch connections
+        const originalWatch = model.watch.bind(model);
+        model.watch = function (...args: any[]) {
+          const stream = originalWatch(...args);
+          wrapper._markWatch(dbName);
+          
+          stream.on('close', () => {
+            wrapper._unmarkWatch(dbName);
+          });
+          
+          stream.on('error', () => {
+            wrapper._unmarkWatch(dbName);
+          });
+
+          return stream;
+        } as any;
+
+        return model;
       },
     };
   }
