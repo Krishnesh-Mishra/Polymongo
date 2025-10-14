@@ -7,7 +7,7 @@ import { LogManager } from "./Manager/LogManager";
 
 export class PolyMongoWrapper {
   private mongoURI: string;
-  private defaultDB: string;
+  
   private maxPoolSize: number;
   private minFreeConnections: number;
   private idleTimeoutMS: number | undefined;
@@ -21,7 +21,6 @@ export class PolyMongoWrapper {
       this.validateOptions(options);
 
       this.mongoURI = options.mongoURI;
-      this.defaultDB = options.defaultDB ?? "default";
       this.maxPoolSize = options.maxPoolSize ?? 10;
       this.minFreeConnections = options.minFreeConnections ?? 0;
       this.idleTimeoutMS = options.idleTimeoutMS ?? undefined;
@@ -77,14 +76,7 @@ export class PolyMongoWrapper {
       }
     }
 
-    // Extract DB
-    const dbName = extractDBName(options.mongoURI);
-
-    // Only set defaultDB if it's 'default'
-    if (dbName === 'default' && dbName) {
-      this.defaultDB = dbName;
-      options.defaultDB = dbName;
-    }
+    
 
     if (
       !options.mongoURI.startsWith("mongodb://") &&
