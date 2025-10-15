@@ -7,7 +7,7 @@ import { LogManager } from "./Manager/LogManager";
 
 export class PolyMongoWrapper {
   private mongoURI: string;
-  
+  private defaultDB: string;
   private maxPoolSize: number;
   private minFreeConnections: number;
   private idleTimeoutMS: number | undefined;
@@ -21,6 +21,7 @@ export class PolyMongoWrapper {
       this.validateOptions(options);
 
       this.mongoURI = options.mongoURI;
+      this.defaultDB = options.defaultDB ?? 'default';
       this.maxPoolSize = options.maxPoolSize ?? 10;
       this.minFreeConnections = options.minFreeConnections ?? 0;
       this.idleTimeoutMS = options.idleTimeoutMS ?? undefined;
@@ -64,19 +65,6 @@ export class PolyMongoWrapper {
     if (typeof options.mongoURI !== "string") {
       throw new Error("mongoURI must be a string");
     }
-    function extractDBName(uri:string) {
-      if (!uri || typeof uri !== 'string') return undefined;
-
-      try {
-        const cleanUri = uri.split('?')[0];             // Remove query params
-        const dbName = cleanUri.split('/').filter(Boolean).pop(); // Last segment
-        return dbName ? dbName.toLowerCase() : undefined;
-      } catch {
-        return undefined;
-      }
-    }
-
-    
 
     if (
       !options.mongoURI.startsWith("mongodb://") &&
@@ -125,55 +113,83 @@ export class PolyMongoWrapper {
       throw new Error("Invalid model provided to wrapModel");
     }
 
-    return {
-      db: (dbName: string = 'default'): mongoose.Model<T> => {
-        try {
-          wrapper.logManager.log(
-            `Accessing model ${baseModel.modelName} for database: ${dbName}`,
-          );
+    const getModelForDB = (dbName: string): mongoose.Model<T> => {
+      try {
+        wrapper.logManager.log(
+          `Accessing model ${baseModel.modelName} for database: ${dbName}`,
+        );
 
-          const conn = wrapper.connectionManager.getConnection(dbName);
-          const model = conn.model<T>(baseModel.modelName, baseModel.schema);
+        const conn = wrapper.connectionManager.getConnection(dbName);
+        const model = conn.model<T>(baseModel.modelName, baseModel.schema);
 
-          const originalWatch = model.watch.bind(model);
-          model.watch = function (...args: any[]) {
-            try {
-              const stream = originalWatch(...args);
-              wrapper.watchManager.addStream(dbName, stream);
+        const originalWatch = model.watch.bind(model);
+        model.watch = function (...args: any[]) {
+          try {
+            const stream = originalWatch(...args);
+            wrapper.watchManager.addStream(dbName, stream);
 
-              stream.on("close", () => {
-                wrapper.watchManager.removeStream(dbName, stream);
-              });
+            stream.on("close", () => {
+              wrapper.watchManager.removeStream(dbName, stream);
+            });
 
-              stream.on("error", (error) => {
-                wrapper.logManager.log(
-                  `Watch stream error for ${dbName}: ${error.message}`,
-                );
-                wrapper.watchManager.removeStream(dbName, stream);
-              });
-
-              return stream;
-            } catch (error) {
-              const errorMsg =
-                error instanceof Error ? error.message : "Unknown error";
+            stream.on("error", (error) => {
               wrapper.logManager.log(
-                `Failed to create watch stream: ${errorMsg}`,
+                `Watch stream error for ${dbName}: ${error.message}`,
               );
-              throw new Error(`Failed to create watch stream: ${errorMsg}`);
-            }
-          } as any;
+              wrapper.watchManager.removeStream(dbName, stream);
+            });
 
-          return model;
-        } catch (error) {
-          const errorMsg =
-            error instanceof Error ? error.message : "Unknown error";
-          wrapper.logManager.log(
-            `Error accessing model ${baseModel.modelName} for ${dbName}: ${errorMsg}`,
-          );
-          throw new Error(`Failed to access model: ${errorMsg}`);
-        }
-      },
+            return stream;
+          } catch (error) {
+            const errorMsg =
+              error instanceof Error ? error.message : "Unknown error";
+            wrapper.logManager.log(
+              `Failed to create watch stream: ${errorMsg}`,
+            );
+            throw new Error(`Failed to create watch stream: ${errorMsg}`);
+          }
+        } as any;
+
+        return model;
+      } catch (error) {
+        const errorMsg =
+          error instanceof Error ? error.message : "Unknown error";
+        wrapper.logManager.log(
+          `Error accessing model ${baseModel.modelName} for ${dbName}: ${errorMsg}`,
+        );
+        throw new Error(`Failed to access model: ${errorMsg}`);
+      }
     };
+
+    // Create a Proxy that intercepts all property access
+    const wrappedModel = new Proxy(
+      {
+        db: (dbName?: string): mongoose.Model<T> => {
+          return getModelForDB(dbName ?? wrapper.defaultDB);
+        },
+      } as any,
+      {
+        get(target, prop) {
+          // If accessing 'db' method, return it
+          if (prop === 'db') {
+            return target.db;
+          }
+
+          // For any other property/method, get the default model and access it
+          const defaultModel = getModelForDB(wrapper.defaultDB);
+          const value = (defaultModel as any)[prop];
+
+          // If it's a function, bind it to the model
+          if (typeof value === 'function') {
+            return value.bind(defaultModel);
+          }
+
+          return value;
+        },
+      }
+    );
+
+    return wrappedModel as WrappedModel<T>;
   }
 
   stats(): ConnectionStats {
@@ -268,5 +284,43 @@ export class PolyMongoWrapper {
 
   getConnectionState(): string {
     return this.connectionManager.getReadyState();
+  }
+
+  async transaction<T>(
+    fn: (session: mongoose.ClientSession) => Promise<T>,
+    options?: mongoose.mongo.TransactionOptions
+  ): Promise<T> {
+    try {
+      this.logManager.log("Starting transaction");
+
+      // Ensure primary connection is initialized
+      const primary = this.connectionManager.initPrimary();
+
+      // Start session and transaction
+      const session = await primary.startSession();
+
+      try {
+        session.startTransaction(options);
+
+        const result = await fn(session);
+
+        await session.commitTransaction();
+        this.logManager.log("Transaction committed successfully");
+
+        return result;
+      } catch (error) {
+        await session.abortTransaction();
+        this.logManager.log(
+          `Transaction aborted: ${error instanceof Error ? error.message : "Unknown error"}`
+        );
+        throw error;
+      } finally {
+        await session.endSession();
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      this.logManager.log(`Transaction failed: ${errorMsg}`);
+      throw new Error(`Transaction failed: ${errorMsg}`);
+    }
   }
 }

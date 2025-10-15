@@ -6,6 +6,7 @@ import * as mongoose from "mongoose";
  */
 export interface PolyMongoOptions {
   mongoURI: string;
+  defaultDB?: string;
   maxPoolSize?: number;
   minFreeConnections?: number;
   idleTimeoutMS?: number;
@@ -17,10 +18,10 @@ export interface PolyMongoOptions {
 /**
  * Wrapped model interface with db method.
  */
-export interface WrappedModel<T extends mongoose.Document> {
+// In your types file
+export type WrappedModel<T extends mongoose.Document> = {
   db: (dbName?: string) => mongoose.Model<T>;
-}
-
+} & mongoose.Model<T>;
 /**
  * Connection statistics interface.
  */

@@ -1,12 +1,12 @@
 {
   "name": "polymongo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Adaptive Multi-Database Wrapper for Mongoose with automatic connection management",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "rimraf dist && tsc",
-    "testServer": "rimraf dist && tsc && nodemon test/server.js",
+    "devServer": "nodemon --watch src/**/*.ts --watch test/**/*.ts --exec ts-node test/server.ts",
     "prepublishOnly": "npm run build",
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts"
@@ -25,20 +25,23 @@
   "author": "Krishnesh Mishra",
   "license": "MIT",
   "dependencies": {
-    "express": "^5.1.0",
     "mongodb": "^6.20.0",
     "mongoose": "^8.19.1",
     "winston": "^3.18.3"
   },
   "devDependencies": {
+    "@types/express": "^5.0.3",
     "@types/mongoose": "^5.11.97",
     "@types/node": "^20.19.21",
     "@types/winston": "^2.4.4",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
+    "concurrently": "^9.2.1",
     "eslint": "^8.54.0",
+    "i": "^0.3.7",
     "jest": "^29.7.0",
     "nodemon": "^3.1.10",
+    "npm": "^11.6.2",
     "prettier": "^3.1.0",
     "rimraf": "^5.0.10",
     "ts-jest": "^29.1.1",
