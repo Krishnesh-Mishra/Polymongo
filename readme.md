@@ -8,7 +8,7 @@ Advanced Multi-Database MongoDB Connection Manager for Node.js with intelligent 
 ## Installation
 
 ```bash
-npm install polymongo mongoose
+npm install polymongo
 ```
 
 ## Quick Start
