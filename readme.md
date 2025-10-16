@@ -253,7 +253,127 @@ await wrapper.transaction(
 - Session is automatically started, committed/aborted, and ended
 
 ---
+## 🚀 Scaling Connections (Advanced)
 
+For high-traffic scenarios or when specific databases need dedicated connection pools or different hosts, PolyMongo supports **database-specific scaling** with independent TCP connections.
+
+### Method 1: Configure at Initialization
+
+```javascript
+const wrapper = PolyMongo.createWrapper({
+  mongoURI: 'mongodb://localhost:27017',
+  maxPoolSize: 10,
+  dbSpecific: [
+    {
+      dbName: 'high_traffic_tenant',
+      mongoURI: 'mongodb://localhost:27018',  // Optional custom host/port
+      options: {
+        maxConnections: 20,      // Dedicated pool size
+        autoClose: true,         // Auto-close when idle
+        ttl: 300000,             // Close after 5 min idle (ms)
+        coldStart: false         // Eager initialize
+      }
+    },
+    {
+      dbName: 'analytics_db',
+      options: {
+        maxConnections: 15,
+        autoClose: false,        // Keep connection alive
+        coldStart: true          // Lazy initialize on first access
+      }
+    }
+  ]
+});
+```
+
+### Method 2: Dynamic Scaling
+
+```javascript
+// Save config without connecting (lazy init on first access)
+wrapper.scale.setDB(['tenant_1', 'tenant_2'], {
+  mongoURI: 'mongodb://localhost:27018',  // Optional custom host/port
+  autoClose: true,
+  ttl: 120000,           // 2 minutes idle timeout
+  maxConnections: 5,     // Separate from main pool
+  coldStart: true        // Default: lazy init
+});
+
+// Explicitly connect and initialize
+await wrapper.scale.connectDB(['tenant_3'], {
+  autoClose: true,
+  ttl: 120000,
+  maxConnections: 5,
+  coldStart: false       // Eager init
+});
+
+// Now these databases use dedicated connections
+const users = await User.db('tenant_1').find();  // Auto-connects if not initialized
+```
+
+### Use Cases
+
+**High-Traffic Tenants**
+```javascript
+// Give premium tenants dedicated pools with custom host
+wrapper.scale.setDB(['premium_tenant_1'], {
+  mongoURI: 'mongodb://premium-host:27017',
+  maxConnections: 30,
+  autoClose: false,
+  coldStart: false
+});
+```
+
+**Temporary Databases**
+```javascript
+// Auto-cleanup for short-lived databases
+await wrapper.scale.connectDB(['temp_migration_db'], {
+  autoClose: true,
+  ttl: 600000,  // Close after 10 minutes idle
+  coldStart: true
+});
+```
+
+**Load Isolation**
+```javascript
+// Separate analytics from production traffic
+const wrapper = PolyMongo.createWrapper({
+  mongoURI: 'mongodb://localhost:27017',
+  maxPoolSize: 10,
+  dbSpecific: [{
+    dbName: 'analytics',
+    mongoURI: 'mongodb://analytics-host:27017',
+    options: { maxConnections: 50, autoClose: false, coldStart: false }
+  }]
+});
+```
+
+### How It Works
+
+- **Separate TCP Connections**: Scaled databases get their own `mongoose.createConnection()` instead of `useDb()`
+- **Independent Pools**: Each scaled database has its own connection pool, separate from the main pool
+- **Custom URI**: Use different host/port/query; database name is ignored and set separately
+- **Auto-Close**: Idle connections automatically close after TTL expires
+- **TTL Reset**: Each query resets the idle timer
+- **Cold Start**: Lazy init (true) connects on first access; eager (false) connects immediately
+
+### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `maxConnections` | `number` | Main pool size | Maximum connections for this database |
+| `autoClose` | `boolean` | `false` | Auto-close connection when idle |
+| `ttl` | `number` | `undefined` | Time in ms before idle connection closes |
+| `coldStart` | `boolean` | `true` | Lazy init (true) or eager init (false) |
+| `mongoURI` | `string` | Main URI | Optional custom URI (host/port/query only) |
+
+### Notes
+
+- Scaled databases maintain separate connection pools
+- Regular databases share the main connection pool
+- Use `setDB` for config ; `connectDB` will do the same a `setDB` but instantly connect instance with that DB 
+- If coldStart false in `setDB`, it auto-calls `connectDB`
+- Monitor with `wrapper.stats()` to see active connections
+---
 ## ⚙️ Configuration Options
 
 ### `PolyMongoOptions`

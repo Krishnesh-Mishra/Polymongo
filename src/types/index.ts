@@ -1,5 +1,6 @@
 // src/types/index.ts
 import * as mongoose from "mongoose";
+import { DBSpecificConfig } from "./scale.types";
 
 /**
  * Options for initializing the wrapper.
@@ -13,6 +14,17 @@ export interface PolyMongoOptions {
   debug?: boolean;
   logPath?: string;
   coldStart?: boolean;
+  dbSpecific?: DBSpecificConfig[];
+}
+
+export interface PoolStats {
+  totalConnections: number;
+  availableConnections: number;
+  inUseConnections: number;
+  waitQueueSize: number;
+  maxPoolSize: number;
+  minPoolSize: number;
+  maxIdleTimeMS?: number;
 }
 
 /**
@@ -25,13 +37,3 @@ export type WrappedModel<T extends mongoose.Document> = {
 /**
  * Connection statistics interface.
  */
-export interface ConnectionStats {
-  activeConnections: number;
-  databases: string[];
-  poolStats: {
-    totalConnections: number;
-    maxPoolSize: number;
-    minFreeConnections: number;
-    idleTimeoutMS?: number;
-  } | null;
-}

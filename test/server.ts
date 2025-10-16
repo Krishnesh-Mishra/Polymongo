@@ -14,7 +14,11 @@ const wrapper = PolyMongo.createWrapper({
     defaultDB: 'test',
     idleTimeoutMS: 30000,
     debug: true,
-    coldStart: true
+    coldStart: true,
+    dbSpecific: [{
+        dbName: 'sm',
+        options: { autoClose: false, coldStart: false, maxConnections: 50 }
+    }]
 });
 
 
@@ -33,8 +37,31 @@ app.get('/users', async (_req: Request, res: Response) => {
 });
 
 // Get wrapper stats
-app.get('/stats', (_req: Request, res: Response) => {
-    res.json(wrapper.stats());
+app.get('/stats', async (_req: Request, res: Response) => {
+    const total = 10000;
+    const batchSize = 100;
+    const batches = Math.ceil(total / batchSize);
+
+    for (let batch = 0; batch < batches; batch++) {
+        const promises = [];
+
+        for (let i = 0; i < batchSize; i++) {
+            const userIndex = batch * batchSize + i + 1;
+            promises.push(User.db('sm').create({ name: `new -- User-${userIndex}` }));
+        }
+        // Wait for all 100 creates in this batch
+        await Promise.all([...promises]);
+
+        // Log stats after batch
+        console.log(wrapper.stats.general(), `Batch ${batch + 1}/${batches} completed`);
+    }
+
+    res.json(await wrapper.stats.db('sm'));
+});
+
+
+app.get('/health', async (_req: Request, res: Response) => {
+    res.send(await wrapper.stats.db('sm'));
 });
 
 
@@ -50,11 +77,15 @@ app.get('/watch/:db', (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
 
-    const changeStream = User.watch();
+    const changeStream = User.db(req.params.db).watch();
 
     changeStream.on('change', change => {
         res.write(`data: ${JSON.stringify(change)}\n\n`);
     });
+    setInterval(() => {
+
+        res.write(`data: ${JSON.stringify(wrapper.stats.general())}\n\n`);
+    }, 1000);
 
     req.on('close', () => {
         changeStream.close();

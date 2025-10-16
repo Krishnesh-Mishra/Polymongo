@@ -1,9 +1,12 @@
 // src/Engine/Wrapper.ts
 import * as mongoose from "mongoose";
-import { PolyMongoOptions, WrappedModel, ConnectionStats } from "../types";
+import { PolyMongoOptions, WrappedModel, PoolStats } from "../types";
 import { ConnectionManager } from "./Manager/ConnectionManager";
 import { WatchManager } from "./Manager/WatchManager";
 import { LogManager } from "./Manager/LogManager";
+import { ConnectionStats, DBSpecificConfig, ScaleOptions } from "../types/scale.types";
+import { getDbStats } from "../lib/dbStats";
+import { DbStats } from "../types/dbStats";
 
 export class PolyMongoWrapper {
   private mongoURI: string;
@@ -15,11 +18,22 @@ export class PolyMongoWrapper {
   private connectionManager: ConnectionManager;
   private watchManager: WatchManager;
   private logManager: LogManager;
-
+  private dbSpecificConfigs?: DBSpecificConfig[];
+  private hooks: {
+    onDbConnect: Array<(db: mongoose.Connection) => void>;
+    onDbDisconnect: Array<(db: mongoose.Connection) => void>;
+    onTheseDBConnect: Map<string, Array<(db: mongoose.Connection) => void>>;
+    onTheseDBDisconnect: Map<string, Array<(db: mongoose.Connection) => void>>;
+  };
   constructor(options: PolyMongoOptions) {
     try {
       this.validateOptions(options);
-
+      this.hooks = {
+        onDbConnect: [],
+        onDbDisconnect: [],
+        onTheseDBConnect: new Map(),
+        onTheseDBDisconnect: new Map(),
+      };
       this.mongoURI = options.mongoURI;
       this.defaultDB = options.defaultDB ?? 'default';
       this.maxPoolSize = options.maxPoolSize ?? 10;
@@ -28,13 +42,18 @@ export class PolyMongoWrapper {
       this.debug = options.debug ?? false;
 
       this.logManager = new LogManager(this.debug, options.logPath);
+      this.dbSpecificConfigs = options.dbSpecific;
+
       this.connectionManager = new ConnectionManager(
         this.mongoURI,
         this.maxPoolSize,
         this.minFreeConnections,
         this.idleTimeoutMS,
         this.logManager,
+        this.dbSpecificConfigs,
+        this.hooks
       );
+
       this.watchManager = new WatchManager(this.logManager);
 
       this.logManager.log(
@@ -57,6 +76,31 @@ export class PolyMongoWrapper {
     }
   }
 
+  public onDbConnect(callback: (db: mongoose.Connection) => void): void {
+    this.hooks.onDbConnect.push(callback);
+  }
+
+  public onDbDisconnect(callback: (db: mongoose.Connection) => void): void {
+    this.hooks.onDbDisconnect.push(callback);
+  }
+
+  public onTheseDBConnect(dbNames: string[], callback: (db: mongoose.Connection) => void): void {
+    dbNames.forEach(dbName => {
+      if (!this.hooks.onTheseDBConnect.has(dbName)) {
+        this.hooks.onTheseDBConnect.set(dbName, []);
+      }
+      this.hooks.onTheseDBConnect.get(dbName)!.push(callback);
+    });
+  }
+
+  public onTheseDBDisconnect(dbNames: string[], callback: (db: mongoose.Connection) => void): void {
+    dbNames.forEach(dbName => {
+      if (!this.hooks.onTheseDBDisconnect.has(dbName)) {
+        this.hooks.onTheseDBDisconnect.set(dbName, []);
+      }
+      this.hooks.onTheseDBDisconnect.get(dbName)!.push(callback);
+    });
+  }
   private validateOptions(options: PolyMongoOptions): void {
     if (!options.mongoURI) {
       throw new Error("mongoURI is required");
@@ -191,32 +235,76 @@ export class PolyMongoWrapper {
 
     return wrappedModel as WrappedModel<T>;
   }
+  private getPoolStats(conn: mongoose.Connection | null): PoolStats | null {
+    if (!conn) return null;
+    const client = conn.getClient() as any;
+    const pool = client?.s?.pool;
+    if (!pool) return null;
 
-  stats(): ConnectionStats {
-    try {
-      const stats: ConnectionStats = {
-        activeConnections: this.connectionManager.connections.size,
-        databases: Array.from(this.connectionManager.connections.keys()),
-        poolStats: this.connectionManager.primary?.getClient()
-          ? {
-            totalConnections:
-              (this.connectionManager.primary?.getClient() as any)?.s?.pool
-                ?.totalConnectionCount || 0,
-            maxPoolSize: this.maxPoolSize,
-            minFreeConnections: this.minFreeConnections,
-            idleTimeoutMS: this.idleTimeoutMS,
-          }
-          : null,
-      };
-      this.logManager.log(`Connection stats: ${JSON.stringify(stats)}`);
-      return stats;
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      this.logManager.log(`Error getting stats: ${errorMsg}`);
-      throw new Error(`Failed to retrieve connection stats: ${errorMsg}`);
-    }
+    return {
+      totalConnections: pool.totalConnectionCount ?? pool.totalCreatedConnectionCount ?? 0,
+      availableConnections: pool.availableConnectionCount ?? pool.totalAvailableCount ?? 0,
+      inUseConnections: pool.inUseConnectionCount ?? pool.totalInUseCount ?? 0,
+      waitQueueSize: pool.waitQueueSize ?? pool.waitingClientsCount ?? pool.waitQueueMemberCount ?? 0,
+      maxPoolSize: pool.maxPoolSize ?? this.maxPoolSize ?? 0,
+      minPoolSize: pool.minPoolSize ?? this.minFreeConnections ?? 0,
+      maxIdleTimeMS: pool.maxIdleTimeMS ?? this.idleTimeoutMS,
+    };
   }
 
+  public stats = {
+    general: (): ConnectionStats => {
+      try {
+        const primary = this.connectionManager.primary;
+        const primaryPoolStats = this.getPoolStats(primary);
+        const sharedDatabases = Array.from(this.connectionManager.connections.keys());
+
+        const separate = Array.from(this.connectionManager.separateConnectionsInfo.values()).map(info => ({
+          dbName: info.dbName,
+          mongoURI: info.mongoURI,
+          readyState: info.connection.readyState,
+          lastAccessed: info.lastAccessed,
+          isInitialized: info.isInitialized,
+          config: info.config,
+          poolStats: this.getPoolStats(info.connection),
+        }));
+
+        let totalConnectionsAcrossPools = 0;
+        if (primaryPoolStats) totalConnectionsAcrossPools += primaryPoolStats.totalConnections;
+        separate.forEach(s => {
+          if (s.poolStats) totalConnectionsAcrossPools += s.poolStats.totalConnections;
+        });
+
+        const stats: ConnectionStats = {
+          totalActivePools: (primary ? 1 : 0) + separate.length,
+          totalConnectionsAcrossPools,
+          primary: primary ? {
+            readyState: primary.readyState,
+            poolStats: primaryPoolStats,
+            sharedDatabases,
+          } : null,
+          separateDB: separate,
+        };
+
+        this.logManager.log(`Connection stats: ${JSON.stringify(stats)}`);
+        return stats;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        this.logManager.log(`Error getting stats: ${errorMsg}`);
+        throw new Error(`Failed to retrieve connection stats: ${errorMsg}`);
+      }
+    },
+
+    db: async (dbName?: string): Promise<DbStats> => {
+      try {
+        return await getDbStats(this.connectionManager, this.logManager, dbName ?? this.defaultDB);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        this.logManager.log(`Error getting DB stats for ${dbName}: ${errorMsg}`);
+        throw new Error(`Failed to retrieve DB stats: ${errorMsg}`);
+      }
+    }
+  };
   async closeAll(): Promise<void> {
     try {
       this.logManager.log("Wrapper closeAll called");
@@ -265,6 +353,10 @@ export class PolyMongoWrapper {
 
   async dropDatabase(dbName: string): Promise<void> {
     try {
+      if (!dbName) {
+        this.logManager.log(`Database name is required to drop a database`);
+        throw new Error("Database name is required to drop a database");
+      }
       this.logManager.log(`Dropping database: ${dbName}`);
       const conn = this.connectionManager.getConnection(dbName);
       await conn.dropDatabase();
@@ -323,4 +415,28 @@ export class PolyMongoWrapper {
       throw new Error(`Transaction failed: ${errorMsg}`);
     }
   }
+
+  public scale = {
+    connectDB: async (dbNames: string[], options?: ScaleOptions): Promise<void> => {
+      try {
+        this.logManager.log(`Scale.connectDB called for: ${dbNames.join(', ')}`);
+        await this.connectionManager.connectDB(dbNames, options);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        this.logManager.log(`Error in scale.connectDB: ${errorMsg}`);
+        throw new Error(`Failed to scale connections: ${errorMsg}`);
+      }
+    },
+
+    setDB: (dbNames: string[], options?: ScaleOptions & { mongoURI?: string }): void => {
+      try {
+        this.logManager.log(`Scale.setDB called for: ${dbNames.join(', ')}`);
+        this.connectionManager.setDB(dbNames, options);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        this.logManager.log(`Error in scale.setDB: ${errorMsg}`);
+        throw new Error(`Failed to set DB configuration: ${errorMsg}`);
+      }
+    }
+  };
 }
