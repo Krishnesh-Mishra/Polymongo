@@ -1,6 +1,6 @@
 import * as mongoose from "mongoose";
-import { LogManager } from "../Engine/Manager/LogManager";
-import { ConnectionManager } from "../Engine/Manager/ConnectionManager";
+import { LogManager } from "../Engine/managers/LogManager";
+import { ConnectionManager } from "../Engine/managers/ConnectionManager";
 import { DbStats } from "../types/dbStats";
 import { PoolStats } from "../types";
 

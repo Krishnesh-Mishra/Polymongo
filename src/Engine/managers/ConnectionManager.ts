@@ -1,18 +1,17 @@
-// src/Engine/Manager/ConnectionManager.ts
 import * as mongoose from "mongoose";
 import { LogManager } from "./LogManager";
-import { DBSpecificConfig, ConnectionPoolInfo, ScaleOptions, PoolStats } from "../../types/scale.types";
+import { DBSpecificConfig, ConnectionPoolInfo, ScaleOptions } from "../../types/scale.types";
+import { cleanMongoURI, getPoolStats } from "../utils/MongoUtils";
+import { CONNECTION_CONSTANTS } from "../constants/ConnectionConstants";
+import { HookManager } from "./HookManager";
 
 export class ConnectionManager {
   primary: mongoose.Connection | null = null;
   connections: Map<string, mongoose.Connection> = new Map();
   private isShuttingDown: boolean = false;
   private reconnectAttempts: number = 0;
-  private readonly MAX_RECONNECT_ATTEMPTS = 5;
-  private readonly RECONNECT_INTERVAL = 5000;
   public dbConfigs: Map<string, DBSpecificConfig['options'] & { mongoURI?: string }> = new Map();
   public separateConnections: Map<string, ConnectionPoolInfo> = new Map();
-
 
   constructor(
     public mongoURI: string,
@@ -21,16 +20,11 @@ export class ConnectionManager {
     private idleTimeoutMS: number | undefined,
     private logManager: LogManager,
     dbSpecificConfigs?: DBSpecificConfig[],
-    private hooks?: {
-      onDbConnect: Array<(db: mongoose.Connection) => void>;
-      onDbDisconnect: Array<(db: mongoose.Connection) => void>;
-      onTheseDBConnect: Map<string, Array<(db: mongoose.Connection) => void>>;
-      onTheseDBDisconnect: Map<string, Array<(db: mongoose.Connection) => void>>;
-    }
+    private hooks?: HookManager['hooks']
   ) {
     if (dbSpecificConfigs) {
       dbSpecificConfigs.forEach(config => {
-        const cleanURI = config.mongoURI ? this.cleanMongoURI(config.mongoURI) : undefined;
+        const cleanURI = config.mongoURI ? cleanMongoURI(config.mongoURI, this.logManager) : undefined;
         this.dbConfigs.set(config.dbName, {
           ...config.options,
           mongoURI: cleanURI
@@ -51,42 +45,15 @@ export class ConnectionManager {
 
   public lastAccessedDbs: Map<string, number> = new Map();
 
-  public getPoolStats(conn: mongoose.Connection | null): PoolStats | null {
-    if (!conn) return null;
-    const client = conn.getClient() as any;
-    const pool = client?.s?.pool;
-    if (!pool) return null;
-
-    return {
-      totalConnections: pool.totalConnectionCount ?? pool.totalCreatedConnectionCount ?? 0,
-      availableConnections: pool.availableConnectionCount ?? pool.totalAvailableCount ?? 0,
-      inUseConnections: pool.inUseConnectionCount ?? pool.totalInUseCount ?? 0,
-      waitQueueSize: pool.waitQueueSize ?? pool.waitingClientsCount ?? pool.waitQueueMemberCount ?? 0,
-      maxPoolSize: pool.maxPoolSize ?? this.maxPoolSize ?? 0,
-      minPoolSize: pool.minPoolSize ?? this.minFreeConnections ?? 0,
-      maxIdleTimeMS: pool.maxIdleTimeMS ?? this.idleTimeoutMS,
-    };
-  }
-
-  private cleanMongoURI(uri: string): string {
-    try {
-      const url = new URL(uri);
-      // Remove the pathname (which contains the database name)
-      url.pathname = '/';
-      const cleanedURI = url.toString().replace(/\/$/, ''); // Remove trailing slash
-      this.logManager.log(`Cleaned URI from ${uri} to ${cleanedURI}`);
-      return cleanedURI;
-    } catch (error) {
-      this.logManager.log(`Failed to parse URI ${uri}, using as-is`);
-      return uri;
-    }
+  public getPoolStats(conn: mongoose.Connection | null): any { // PoolStats | null
+    return getPoolStats(conn, this.maxPoolSize, this.minFreeConnections, this.idleTimeoutMS);
   }
 
   public setDB(dbNames: string[], options?: ScaleOptions & { mongoURI?: string }): void {
     this.logManager.log(`setDB called for: ${dbNames.join(', ')}`);
 
     for (const dbName of dbNames) {
-      const cleanURI = options?.mongoURI ? this.cleanMongoURI(options.mongoURI) : undefined;
+      const cleanURI = options?.mongoURI ? cleanMongoURI(options.mongoURI, this.logManager) : undefined;
 
       const config = {
         autoClose: options?.autoClose,
@@ -140,9 +107,9 @@ export class ConnectionManager {
           maxPoolSize: maxConnections,
           minPoolSize: this.minFreeConnections,
           maxIdleTimeMS: this.idleTimeoutMS,
-          serverSelectionTimeoutMS: 10000,
-          socketTimeoutMS: 45000,
-          connectTimeoutMS: 10000,
+          serverSelectionTimeoutMS: CONNECTION_CONSTANTS.SERVER_SELECTION_TIMEOUT,
+          socketTimeoutMS: CONNECTION_CONSTANTS.SOCKET_TIMEOUT,
+          connectTimeoutMS: CONNECTION_CONSTANTS.CONNECT_TIMEOUT,
         });
 
         this.setupConnectionHandlers(connection);
@@ -234,9 +201,9 @@ export class ConnectionManager {
           maxPoolSize: this.maxPoolSize + 1,
           minPoolSize: this.minFreeConnections,
           maxIdleTimeMS: this.idleTimeoutMS,
-          serverSelectionTimeoutMS: 10000,
-          socketTimeoutMS: 45000,
-          connectTimeoutMS: 10000,
+          serverSelectionTimeoutMS: CONNECTION_CONSTANTS.SERVER_SELECTION_TIMEOUT,
+          socketTimeoutMS: CONNECTION_CONSTANTS.SOCKET_TIMEOUT,
+          connectTimeoutMS: CONNECTION_CONSTANTS.CONNECT_TIMEOUT,
         });
 
         this.logManager.log(
@@ -282,7 +249,7 @@ export class ConnectionManager {
       this.logManager.log("MongoDB disconnected");
       const dbName = connection.name;
       this.hooks?.onTheseDBDisconnect.get(dbName)?.forEach(callback => callback(connection));
-      if (!this.isShuttingDown && this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
+      if (!this.isShuttingDown && this.reconnectAttempts < CONNECTION_CONSTANTS.MAX_RECONNECT_ATTEMPTS) {
         this.handleConnectionError(new Error("Connection disconnected"), connection);
       }
     });
@@ -313,20 +280,21 @@ export class ConnectionManager {
       }
     }
 
-    if (this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
+    if (this.reconnectAttempts < CONNECTION_CONSTANTS.MAX_RECONNECT_ATTEMPTS) {
       this.attemptReconnect(poolInfo);
     } else {
       this.logManager.log("Max reconnection attempts reached");
     }
   }
+
   private attemptReconnect(poolInfo?: ConnectionPoolInfo): void {
     this.reconnectAttempts++;
-    if (this.reconnectAttempts > this.MAX_RECONNECT_ATTEMPTS) {
+    if (this.reconnectAttempts > CONNECTION_CONSTANTS.MAX_RECONNECT_ATTEMPTS) {
       this.logManager.log("Max reconnection attempts reached");
       return;
     }
-    const delay = this.RECONNECT_INTERVAL * this.reconnectAttempts;
-    this.logManager.log(`Attempting reconnection ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS} in ${delay}ms`);
+    const delay = CONNECTION_CONSTANTS.RECONNECT_INTERVAL * this.reconnectAttempts;
+    this.logManager.log(`Attempting reconnection ${this.reconnectAttempts}/${CONNECTION_CONSTANTS.MAX_RECONNECT_ATTEMPTS} in ${delay}ms`);
     setTimeout(() => {
       if (this.isShuttingDown) return;
       this.logManager.log("Reconnecting to MongoDB...");
@@ -338,9 +306,9 @@ export class ConnectionManager {
               maxPoolSize: poolInfo.config.maxConnections || this.maxPoolSize,
               minPoolSize: this.minFreeConnections,
               maxIdleTimeMS: this.idleTimeoutMS,
-              serverSelectionTimeoutMS: 10000,
-              socketTimeoutMS: 45000,
-              connectTimeoutMS: 10000,
+              serverSelectionTimeoutMS: CONNECTION_CONSTANTS.SERVER_SELECTION_TIMEOUT,
+              socketTimeoutMS: CONNECTION_CONSTANTS.SOCKET_TIMEOUT,
+              connectTimeoutMS: CONNECTION_CONSTANTS.CONNECT_TIMEOUT,
               bufferCommands: false,
             });
             this.setupConnectionHandlers(poolInfo.connection);
@@ -357,9 +325,9 @@ export class ConnectionManager {
             maxPoolSize: this.maxPoolSize + 1,
             minPoolSize: this.minFreeConnections,
             maxIdleTimeMS: this.idleTimeoutMS,
-            serverSelectionTimeoutMS: 10000,
-            socketTimeoutMS: 45000,
-            connectTimeoutMS: 10000,
+            serverSelectionTimeoutMS: CONNECTION_CONSTANTS.SERVER_SELECTION_TIMEOUT,
+            socketTimeoutMS: CONNECTION_CONSTANTS.SOCKET_TIMEOUT,
+            connectTimeoutMS: CONNECTION_CONSTANTS.CONNECT_TIMEOUT,
             bufferCommands: false,
           });
           this.setupConnectionHandlers(this.primary);
@@ -487,6 +455,7 @@ export class ConnectionManager {
   public get separateConnectionsInfo(): Map<string, ConnectionPoolInfo> {
     return this.separateConnections;
   }
+
   isConnected(): boolean {
     return this.primary !== null && this.primary.readyState === 1;
   }

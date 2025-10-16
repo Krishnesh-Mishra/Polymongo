@@ -1,12 +1,17 @@
-// src/Engine/Wrapper.ts
 import * as mongoose from "mongoose";
-import { PolyMongoOptions, WrappedModel, PoolStats } from "../types";
-import { ConnectionManager } from "./Manager/ConnectionManager";
-import { WatchManager } from "./Manager/WatchManager";
-import { LogManager } from "./Manager/LogManager";
-import { ConnectionStats, DBSpecificConfig, ScaleOptions } from "../types/scale.types";
-import { getDbStats } from "../lib/dbStats";
-import { DbStats } from "../types/dbStats";
+import { PolyMongoOptions, WrappedModel } from "../types";
+import { ConnectionManager } from "./managers/ConnectionManager";
+import { HookManager } from "./managers/HookManager";
+import { LogManager } from "./managers/LogManager";
+import { WatchManager } from "./managers/WatchManager";
+import { validateOptions } from "./utils/Validators";
+import { StatsService } from "./services/StatsService";
+import { ScaleService } from "./services/ScaleService";
+import { DBSpecificConfig } from "../types/scale.types";
+
+
+
+
 
 export class PolyMongoWrapper {
   private mongoURI: string;
@@ -16,24 +21,26 @@ export class PolyMongoWrapper {
   private idleTimeoutMS: number | undefined;
   private debug: boolean;
   private connectionManager: ConnectionManager;
-  private watchManager: WatchManager;
+  private hookManager: HookManager;
   private logManager: LogManager;
+  private watchManager: WatchManager;
   private dbSpecificConfigs?: DBSpecificConfig[];
-  private hooks: {
-    onDbConnect: Array<(db: mongoose.Connection) => void>;
-    onDbDisconnect: Array<(db: mongoose.Connection) => void>;
-    onTheseDBConnect: Map<string, Array<(db: mongoose.Connection) => void>>;
-    onTheseDBDisconnect: Map<string, Array<(db: mongoose.Connection) => void>>;
+  private statsService: StatsService;
+  private scaleService: ScaleService;
+  public stats: {
+    general: () => any;
+    db: (dbName?: string) => Promise<any>;
+    listDatabases: (dbName?: string) => Promise<any>;
   };
+  public scale: {
+    connectDB: (dbNames: string[], options?: any) => Promise<void>;
+    setDB: (dbNames: string[], options?: any) => void;
+  };
+
   constructor(options: PolyMongoOptions) {
     try {
-      this.validateOptions(options);
-      this.hooks = {
-        onDbConnect: [],
-        onDbDisconnect: [],
-        onTheseDBConnect: new Map(),
-        onTheseDBDisconnect: new Map(),
-      };
+      validateOptions(options);
+      this.hookManager = new HookManager();
       this.mongoURI = options.mongoURI;
       this.defaultDB = options.defaultDB ?? 'default';
       this.maxPoolSize = options.maxPoolSize ?? 10;
@@ -51,10 +58,24 @@ export class PolyMongoWrapper {
         this.idleTimeoutMS,
         this.logManager,
         this.dbSpecificConfigs,
-        this.hooks
+        this.hookManager.hooks
       );
 
       this.watchManager = new WatchManager(this.logManager);
+      this.statsService = new StatsService(this.connectionManager, this.logManager, this.getPoolStats.bind(this), this.defaultDB);
+      this.scaleService = new ScaleService(this.connectionManager, this.logManager);
+
+      this.stats = {
+        general: this.statsService.general.bind(this.statsService),
+        db: this.statsService.db.bind(this.statsService),
+        listDatabases: this.statsService.listDatabases.bind(this.statsService),
+        
+      };
+
+      this.scale = {
+        connectDB: this.scaleService.connectDB.bind(this.scaleService),
+        setDB: this.scaleService.setDB.bind(this.scaleService),
+      };
 
       this.logManager.log(
         `Creating PolyMongoWrapper with options: ${JSON.stringify(options)}`,
@@ -77,75 +98,19 @@ export class PolyMongoWrapper {
   }
 
   public onDbConnect(callback: (db: mongoose.Connection) => void): void {
-    this.hooks.onDbConnect.push(callback);
+    this.hookManager.onDbConnect(callback);
   }
 
   public onDbDisconnect(callback: (db: mongoose.Connection) => void): void {
-    this.hooks.onDbDisconnect.push(callback);
+    this.hookManager.onDbDisconnect(callback);
   }
 
   public onTheseDBConnect(dbNames: string[], callback: (db: mongoose.Connection) => void): void {
-    dbNames.forEach(dbName => {
-      if (!this.hooks.onTheseDBConnect.has(dbName)) {
-        this.hooks.onTheseDBConnect.set(dbName, []);
-      }
-      this.hooks.onTheseDBConnect.get(dbName)!.push(callback);
-    });
+    this.hookManager.onTheseDBConnect(dbNames, callback);
   }
 
   public onTheseDBDisconnect(dbNames: string[], callback: (db: mongoose.Connection) => void): void {
-    dbNames.forEach(dbName => {
-      if (!this.hooks.onTheseDBDisconnect.has(dbName)) {
-        this.hooks.onTheseDBDisconnect.set(dbName, []);
-      }
-      this.hooks.onTheseDBDisconnect.get(dbName)!.push(callback);
-    });
-  }
-  private validateOptions(options: PolyMongoOptions): void {
-    if (!options.mongoURI) {
-      throw new Error("mongoURI is required");
-    }
-
-    if (typeof options.mongoURI !== "string") {
-      throw new Error("mongoURI must be a string");
-    }
-
-    if (
-      !options.mongoURI.startsWith("mongodb://") &&
-      !options.mongoURI.startsWith("mongodb+srv://")
-    ) {
-      throw new Error("mongoURI must start with mongodb:// or mongodb+srv://");
-    }
-
-    if (
-      options.maxPoolSize !== undefined &&
-      (typeof options.maxPoolSize !== "number" || options.maxPoolSize < 1)
-    ) {
-      throw new Error("maxPoolSize must be a positive number");
-    }
-
-    if (
-      options.minFreeConnections !== undefined &&
-      (typeof options.minFreeConnections !== "number" ||
-        options.minFreeConnections < 0)
-    ) {
-      throw new Error("minFreeConnections must be a non-negative number");
-    }
-
-    if (
-      options.idleTimeoutMS !== undefined &&
-      (typeof options.idleTimeoutMS !== "number" || options.idleTimeoutMS < 0)
-    ) {
-      throw new Error("idleTimeoutMS must be a non-negative number");
-    }
-
-    if (
-      options.minFreeConnections !== undefined &&
-      options.maxPoolSize !== undefined &&
-      options.minFreeConnections > options.maxPoolSize
-    ) {
-      throw new Error("minFreeConnections cannot be greater than maxPoolSize");
-    }
+    this.hookManager.onTheseDBDisconnect(dbNames, callback);
   }
 
   wrapModel<T extends mongoose.Document>(
@@ -235,7 +200,8 @@ export class PolyMongoWrapper {
 
     return wrappedModel as WrappedModel<T>;
   }
-  private getPoolStats(conn: mongoose.Connection | null): PoolStats | null {
+
+  private getPoolStats(conn: mongoose.Connection | null): any {
     if (!conn) return null;
     const client = conn.getClient() as any;
     const pool = client?.s?.pool;
@@ -252,124 +218,6 @@ export class PolyMongoWrapper {
     };
   }
 
-  public stats = {
-    general: (): ConnectionStats => {
-      try {
-        const primary = this.connectionManager.primary;
-        const primaryPoolStats = this.getPoolStats(primary);
-        const sharedDatabases = Array.from(this.connectionManager.connections.keys());
-
-        const separate = Array.from(this.connectionManager.separateConnectionsInfo.values()).map(info => ({
-          dbName: info.dbName,
-          mongoURI: info.mongoURI,
-          readyState: info.connection.readyState,
-          lastAccessed: info.lastAccessed,
-          isInitialized: info.isInitialized,
-          config: info.config,
-          poolStats: this.getPoolStats(info.connection),
-        }));
-
-        let totalConnectionsAcrossPools = 0;
-        if (primaryPoolStats) totalConnectionsAcrossPools += primaryPoolStats.totalConnections;
-        separate.forEach(s => {
-          if (s.poolStats) totalConnectionsAcrossPools += s.poolStats.totalConnections;
-        });
-
-        const stats: ConnectionStats = {
-          totalActivePools: (primary ? 1 : 0) + separate.length,
-          totalConnectionsAcrossPools,
-          primary: primary ? {
-            readyState: primary.readyState,
-            poolStats: primaryPoolStats,
-            sharedDatabases,
-          } : null,
-          separateDB: separate,
-        };
-
-        this.logManager.log(`Connection stats: ${JSON.stringify(stats)}`);
-        return stats;
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error getting stats: ${errorMsg}`);
-        throw new Error(`Failed to retrieve connection stats: ${errorMsg}`);
-      }
-    },
-
-    db: async (dbName?: string): Promise<DbStats> => {
-      try {
-        return await getDbStats(this.connectionManager, this.logManager, dbName ?? this.defaultDB);
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error getting DB stats for ${dbName}: ${errorMsg}`);
-        throw new Error(`Failed to retrieve DB stats: ${errorMsg}`);
-      }
-    }
-  };
-  async closeAll(): Promise<void> {
-    try {
-      this.logManager.log("Wrapper closeAll called");
-      this.watchManager.closeAllWatches();
-      await this.connectionManager.closeAll();
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      this.logManager.log(`Error in closeAll: ${errorMsg}`);
-      throw new Error(`Failed to close connections: ${errorMsg}`);
-    }
-  }
-
-  async forceCloseAll(): Promise<void> {
-    try {
-      this.logManager.log("Wrapper forceCloseAll called");
-      this.watchManager.closeAllWatches();
-      await this.connectionManager.forceCloseAll();
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      this.logManager.log(`Error in forceCloseAll: ${errorMsg}`);
-      throw new Error(`Failed to force close connections: ${errorMsg}`);
-    }
-  }
-
-  closeDBstream(dbName: string): void {
-    try {
-      this.logManager.log(`Wrapper closeDBstream called for ${dbName}`);
-      this.watchManager.closeDBstream(dbName);
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      this.logManager.log(`Error closing DB stream: ${errorMsg}`);
-      throw new Error(`Failed to close database stream: ${errorMsg}`);
-    }
-  }
-
-  closeAllWatches(): void {
-    try {
-      this.logManager.log("Wrapper closeAllWatches called");
-      this.watchManager.closeAllWatches();
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      this.logManager.log(`Error closing watches: ${errorMsg}`);
-      throw new Error(`Failed to close watches: ${errorMsg}`);
-    }
-  }
-
-  async dropDatabase(dbName: string): Promise<void> {
-    try {
-      if (!dbName) {
-        this.logManager.log(`Database name is required to drop a database`);
-        throw new Error("Database name is required to drop a database");
-      }
-      this.logManager.log(`Dropping database: ${dbName}`);
-      const conn = this.connectionManager.getConnection(dbName);
-      await conn.dropDatabase();
-      this.connectionManager.connections.delete(dbName);
-      this.watchManager.closeDBstream(dbName);
-      this.logManager.log(`Database ${dbName} dropped successfully`);
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      this.logManager.log(`Error dropping database ${dbName}: ${errorMsg}`);
-      throw new Error(`Failed to drop database: ${errorMsg}`);
-    }
-  }
-
   isConnected(): boolean {
     return this.connectionManager.isConnected();
   }
@@ -384,21 +232,13 @@ export class PolyMongoWrapper {
   ): Promise<T> {
     try {
       this.logManager.log("Starting transaction");
-
-      // Ensure primary connection is initialized
       const primary = this.connectionManager.initPrimary();
-
-      // Start session and transaction
       const session = await primary.startSession();
-
       try {
         session.startTransaction(options);
-
         const result = await fn(session);
-
         await session.commitTransaction();
         this.logManager.log("Transaction committed successfully");
-
         return result;
       } catch (error) {
         await session.abortTransaction();
@@ -416,26 +256,382 @@ export class PolyMongoWrapper {
     }
   }
 
-  public scale = {
-    connectDB: async (dbNames: string[], options?: ScaleOptions): Promise<void> => {
+
+
+  public bulkTasks = {
+    copyDatabase: async (sourceDB: string, targetDB: string): Promise<void> => {
       try {
-        this.logManager.log(`Scale.connectDB called for: ${dbNames.join(', ')}`);
-        await this.connectionManager.connectDB(dbNames, options);
+        this.logManager.log(`Copying database from ${sourceDB} to ${targetDB}`);
+
+        const sourceConn = this.connectionManager.getConnection(sourceDB);
+        const targetConn = this.connectionManager.getConnection(targetDB);
+
+        // Wait for connections to be ready
+        await new Promise<void>((resolve, reject) => {
+          if (sourceConn.readyState === 1) {
+            resolve();
+          } else {
+            sourceConn.once('open', () => resolve());
+            sourceConn.once('error', reject);
+          }
+        });
+
+        await new Promise<void>((resolve, reject) => {
+          if (targetConn.readyState === 1) {
+            resolve();
+          } else {
+            targetConn.once('open', () => resolve());
+            targetConn.once('error', reject);
+          }
+        });
+
+        if (!sourceConn.db || !targetConn.db) {
+          throw new Error("Database connection not ready");
+        }
+
+        const collections = await sourceConn.db.listCollections().toArray();
+
+        for (const collInfo of collections) {
+          const collName = collInfo.name;
+          this.logManager.log(`Copying collection: ${collName}`);
+
+          const docs = await sourceConn.db.collection(collName).find({}).toArray();
+
+          if (docs.length > 0) {
+            await targetConn.db.collection(collName).insertMany(docs);
+          }
+
+          const indexes = await sourceConn.db.collection(collName).indexes();
+          for (const index of indexes) {
+            if (index.name !== '_id_') {
+              const { name, ...indexSpec } = index;
+              await targetConn.db.collection(collName).createIndex(
+                indexSpec.key,
+                { name, ...indexSpec }
+              );
+            }
+          }
+        }
+
+        this.logManager.log(`Database copied from ${sourceDB} to ${targetDB}`);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error in scale.connectDB: ${errorMsg}`);
-        throw new Error(`Failed to scale connections: ${errorMsg}`);
+        this.logManager.log(`Error copying database: ${errorMsg}`);
+        throw new Error(`Failed to copy database: ${errorMsg}`);
       }
     },
 
-    setDB: (dbNames: string[], options?: ScaleOptions & { mongoURI?: string }): void => {
+    dropDatabase: async (dbName: string): Promise<void> => {
       try {
-        this.logManager.log(`Scale.setDB called for: ${dbNames.join(', ')}`);
-        this.connectionManager.setDB(dbNames, options);
+        if (!dbName) {
+          throw new Error("Database name is required to drop a database");
+        }
+        this.logManager.log(`Dropping database: ${dbName}`);
+        const conn = this.connectionManager.getConnection(dbName);
+        await conn.dropDatabase();
+        this.connectionManager.connections.delete(dbName);
+        this.watchManager.closeDBstream(dbName);
+        this.logManager.log(`Database ${dbName} dropped successfully`);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error in scale.setDB: ${errorMsg}`);
-        throw new Error(`Failed to set DB configuration: ${errorMsg}`);
+        this.logManager.log(`Error dropping database ${dbName}: ${errorMsg}`);
+        throw new Error(`Failed to drop database: ${errorMsg}`);
+      }
+    },
+
+    export: async (dbName: string): Promise<any> => {
+      try {
+        this.logManager.log(`Exporting database: ${dbName}`);
+
+        const conn = this.connectionManager.getConnection(dbName);
+
+        // Wait for connection
+        await new Promise<void>((resolve, reject) => {
+          if (conn.readyState === 1) {
+            resolve();
+          } else {
+            conn.once('open', () => resolve());
+            conn.once('error', reject);
+          }
+        });
+
+        if (!conn.db) {
+          throw new Error("Database connection not ready");
+        }
+
+        const collections = await conn.db.listCollections().toArray();
+        const exportData: any = {
+          database: dbName,
+          exportDate: new Date().toISOString(),
+          collections: {},
+        };
+
+        for (const collInfo of collections) {
+          const collName = collInfo.name;
+          this.logManager.log(`Exporting collection: ${collName}`);
+
+          const docs = await conn.db.collection(collName).find({}).toArray();
+          const indexes = await conn.db.collection(collName).indexes();
+
+          exportData.collections[collName] = {
+            documents: docs,
+            indexes: indexes
+          };
+        }
+
+        this.logManager.log(`Database ${dbName} exported successfully`);
+        return exportData;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        this.logManager.log(`Error exporting database: ${errorMsg}`);
+        throw new Error(`Failed to export database: ${errorMsg}`);
+      }
+    },
+
+    import: async (dbName: string, data: any): Promise<void> => {
+      try {
+        this.logManager.log(`Importing database to: ${dbName}`);
+
+        if (!data.collections || typeof data.collections !== 'object') {
+          throw new Error("Invalid import data format");
+        }
+
+        const conn = this.connectionManager.getConnection(dbName);
+
+        // Wait for connection
+        await new Promise<void>((resolve, reject) => {
+          if (conn.readyState === 1) {
+            resolve();
+          } else {
+            conn.once('open', () => resolve());
+            conn.once('error', reject);
+          }
+        });
+
+        if (!conn.db) {
+          throw new Error("Database connection not ready");
+        }
+
+        for (const [collName, collData] of Object.entries(data.collections as any)) {
+          this.logManager.log(`Importing collection: ${collName}`);
+
+          const { documents, indexes } = collData as any;
+
+          if (documents && documents.length > 0) {
+            await conn.db.collection(collName).insertMany(documents);
+          }
+
+          if (indexes && Array.isArray(indexes)) {
+            for (const index of indexes) {
+              if (index.name !== '_id_') {
+                const { name, ...indexSpec } = index;
+                await conn.db.collection(collName).createIndex(
+                  indexSpec.key,
+                  { name, ...indexSpec }
+                );
+              }
+            }
+          }
+        }
+
+        this.logManager.log(`Database imported to ${dbName} successfully`);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        this.logManager.log(`Error importing database: ${errorMsg}`);
+        throw new Error(`Failed to import database: ${errorMsg}`);
+      }
+    },
+    exportStream: (dbName: string): NodeJS.ReadableStream => {
+      const { Readable } = require('stream');
+
+      const stream = new Readable({
+        objectMode: false,
+        async read() { }
+      });
+
+      (async () => {
+        try {
+          this.logManager.log(`Starting stream export for: ${dbName}`);
+
+          const conn = this.connectionManager.getConnection(dbName);
+
+          await new Promise<void>((resolve, reject) => {
+            if (conn.readyState === 1) resolve();
+            else {
+              conn.once('open', () => resolve());
+              conn.once('error', reject);
+            }
+          });
+
+          if (!conn.db) throw new Error("Database connection not ready");
+
+          // Start JSON structure
+          stream.push('{"database":"' + dbName + '","exportDate":"' + new Date().toISOString() + '","collections":{');
+
+          const collections = await conn.db.listCollections().toArray();
+
+          for (let i = 0; i < collections.length; i++) {
+            const collName = collections[i].name;
+            this.logManager.log(`Streaming collection: ${collName}`);
+
+            if (i > 0) stream.push(',');
+            stream.push('"' + collName + '":{"documents":[');
+
+            // Stream documents
+            const cursor = conn.db.collection(collName).find({});
+            let first = true;
+
+            for await (const doc of cursor) {
+              if (!first) stream.push(',');
+              stream.push(JSON.stringify(doc));
+              first = false;
+            }
+
+            stream.push('],"indexes":');
+            const indexes = await conn.db.collection(collName).indexes();
+            stream.push(JSON.stringify(indexes));
+            stream.push('}');
+          }
+
+          stream.push('}}');
+          stream.push(null);
+
+          this.logManager.log(`Stream export completed for: ${dbName}`);
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : "Unknown error";
+          this.logManager.log(`Error in stream export: ${errorMsg}`);
+          stream.destroy(new Error(`Export stream failed: ${errorMsg}`));
+        }
+      })();
+
+      return stream;
+    },
+
+    importStream: async (dbName: string, stream: NodeJS.ReadableStream): Promise<void> => {
+      return new Promise(async (resolve, reject) => {
+        try {
+          this.logManager.log(`Starting stream import to: ${dbName}`);
+
+          const conn = this.connectionManager.getConnection(dbName);
+
+          await new Promise<void>((resolveConn, rejectConn) => {
+            if (conn.readyState === 1) resolveConn();
+            else {
+              conn.once('open', () => resolveConn());
+              conn.once('error', rejectConn);
+            }
+          });
+
+          if (!conn.db) throw new Error("Database connection not ready");
+
+          let buffer = '';
+
+          stream.on('data', (chunk) => {
+            buffer += chunk.toString();
+          });
+
+          stream.on('end', async () => {
+            try {
+              const data = JSON.parse(buffer);
+
+              if (!data.collections || typeof data.collections !== 'object') {
+                throw new Error("Invalid import data format");
+              }
+
+              for (const [collName, collData] of Object.entries(data.collections as any)) {
+                this.logManager.log(`Importing collection: ${collName}`);
+
+                const { documents, indexes } = collData as any;
+
+                if (documents && documents.length > 0) {
+                  // Insert in batches to handle large collections
+                  const batchSize = 1000;
+                  for (let i = 0; i < documents.length; i += batchSize) {
+                    const batch = documents.slice(i, i + batchSize);
+                    await conn.db!.collection(collName).insertMany(batch);
+                  }
+                }
+
+                if (indexes && Array.isArray(indexes)) {
+                  for (const index of indexes) {
+                    if (index.name !== '_id_') {
+                      const { name, ...indexSpec } = index;
+                      await conn.db!.collection(collName).createIndex(
+                        indexSpec.key,
+                        { name, ...indexSpec }
+                      );
+                    }
+                  }
+                }
+              }
+
+              this.logManager.log(`Stream import completed for: ${dbName}`);
+              resolve();
+            } catch (error) {
+              const errorMsg = error instanceof Error ? error.message : "Unknown error";
+              this.logManager.log(`Error processing import stream: ${errorMsg}`);
+              reject(new Error(`Import stream failed: ${errorMsg}`));
+            }
+          });
+
+          stream.on('error', (error) => {
+            this.logManager.log(`Stream error: ${error.message}`);
+            reject(new Error(`Import stream failed: ${error.message}`));
+          });
+
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : "Unknown error";
+          this.logManager.log(`Error in stream import: ${errorMsg}`);
+          reject(new Error(`Failed to import stream: ${errorMsg}`));
+        }
+      });
+    }
+  };
+
+  public actions = {
+    closeAll: async (): Promise<void> => {
+      try {
+        this.logManager.log("Actions closeAll called");
+        this.watchManager.closeAllWatches();
+        await this.connectionManager.closeAll();
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        this.logManager.log(`Error in actions.closeAll: ${errorMsg}`);
+        throw new Error(`Failed to close connections: ${errorMsg}`);
+      }
+    },
+
+    forceCloseAll: async (): Promise<void> => {
+      try {
+        this.logManager.log("Actions forceCloseAll called");
+        this.watchManager.closeAllWatches();
+        await this.connectionManager.forceCloseAll();
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        this.logManager.log(`Error in actions.forceCloseAll: ${errorMsg}`);
+        throw new Error(`Failed to force close connections: ${errorMsg}`);
+      }
+    },
+
+    closeDBstream: (dbName: string): void => {
+      try {
+        this.logManager.log(`Actions closeDBstream called for ${dbName}`);
+        this.watchManager.closeDBstream(dbName);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        this.logManager.log(`Error closing DB stream: ${errorMsg}`);
+        throw new Error(`Failed to close database stream: ${errorMsg}`);
+      }
+    },
+
+    closeAllWatches: (): void => {
+      try {
+        this.logManager.log("Actions closeAllWatches called");
+        this.watchManager.closeAllWatches();
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        this.logManager.log(`Error closing watches: ${errorMsg}`);
+        throw new Error(`Failed to close watches: ${errorMsg}`);
       }
     }
   };
