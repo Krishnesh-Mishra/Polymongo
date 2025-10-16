@@ -4,7 +4,7 @@ Advanced Multi-Database MongoDB Connection Manager for Node.js with intelligent 
 
 [![NPM Version](https://img.shields.io/npm/v/polymongo.svg)](https://www.npmjs.com/package/polymongo)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
-
+ 
 ## Installation
 
 ```bash
