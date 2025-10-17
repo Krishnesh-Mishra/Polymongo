@@ -1,4 +1,4 @@
-![Project Banner](./assets/banner.png)
+![Project Banner](./assets/Banner.png)
 
 
 # 🚀 PolyMongo
