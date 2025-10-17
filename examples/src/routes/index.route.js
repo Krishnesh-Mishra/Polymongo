@@ -1,9 +1,6 @@
 ﻿/**
  * Index Router
- * Aggregates all sub-routers for clean mounting.
- * Usage: app.use('/', indexRouter(wrapper)); Handles req.wrapper passthrough.
- * Includes: users, posts, seed, all features examples.
- * Notes: req.wrapper = app.locals.wrapper ensures access in sub-routes.
+ * Aggregates sub-routers.
  */
 const express = require('express');
 const router = express.Router();
@@ -22,11 +19,6 @@ const bulkExportRouter = require('../../features/bulk-export');
 const bulkImportRouter = require('../../features/bulk-import');
 const bulkStreamExportRouter = require('../../features/bulk-stream-export');
 const bulkStreamImportRouter = require('../../features/bulk-stream-import');
-
-router.use((req, res, next) => {
-  req.wrapper = req.app.locals.wrapper;
-  next();
-});
 
 router.use('/users', userRouter);
 router.use('/posts', postRouter);

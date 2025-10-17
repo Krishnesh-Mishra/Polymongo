@@ -2,8 +2,6 @@
  * Post Model Schema
  * Post schema with ref to User for populate examples.
  * Fields: title (required), content, userId (ref: 'User'), timestamps.
- * Usage: Populate in queries: .populate('userId'). Supports watch streams.
- * Example: Post.db('Polymongo').watch() for change detection.
  */
 const mongoose = require('mongoose');
 
@@ -13,4 +11,6 @@ const postSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 
-module.exports = mongoose.model('Post', postSchema);
+const PostModel = mongoose.model('Post', postSchema)
+
+module.exports = PostModel

@@ -6,9 +6,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "rimraf dist && tsc",
-    "devServer": "nodemon --watch src/**/*.ts --watch test/**/*.ts --exec ts-node test/server.ts",
     "prepublishOnly": "npm run build",
-    "lint": "eslint src/**/*.ts",
+    "exServer": "nodemon examples/server.js",
     "format": "prettier --write src/**/*.ts"
   },
   "files": [
@@ -59,4 +58,5 @@
     "url": "https://github.com/Krishnesh-Mishra/polymongo/issues"
   },
   "homepage": "https://github.com/Krishnesh-Mishra/polymongo#readme"
+  
 }
