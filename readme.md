@@ -1,6 +1,5 @@
 ![Project Banner](./assets/Banner.png)
 
-
 # 🚀 PolyMongo
 
 **Enterprise-grade MongoDB connection manager with intelligent multi-database pooling**
