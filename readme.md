@@ -43,48 +43,6 @@ await User.db('analytics').find(); // That's it.
 - 🛡️ **Production Ready** - Graceful shutdown, error recovery, comprehensive logging
 
 
-## 🚀 The Story Behind **PolyMongo** (Definitely Skip This Part)  
-This Skipping part is not a Typo.
-
-It all started with a simple goal: I was building a powerful ERP system — something on the scale of SAP or Zoho.
-
-As the project grew, while testing at scale testing 100s of Customer Mocks, each needed their own database. At first, I wrote a small script to quickly switch between databases whenever needed. It worked fine… until it didn’t.
-
-When hundreds or even thousands of databases were connected simultaneously, performance started to crumble. Each active user was opening new connections, and the server was struggling to keep up. The architecture was not scalable — **100 users meant 100 connections**.
-
-That’s when the idea of a **Connection Management Engine** was born.  
-In the early prerelease `v0.10.0`, PolyMongo was just a **small engine built around mathematical algorithms** like **Least Recently Used (LRU)** to reduce unnecessary connections and optimize resource usage. It was smart but still limited in how it actually handled connections.
-
-Then came the real turning point — the **`v1.0.0` release**.  
-In this version, I introduced a **single TCP connection** strategy. Instead of maintaining hundreds of open connections, PolyMongo created **just one connection** to [MongoDB](https://www.mongodb.com) and switched databases behind the scenes. This made the system far more stable, scalable, and efficient.
-
-It was fast. It was clean. And for a moment, I was happy.
-
-But as the project grew, I started noticing another pain point:
-- Every Next.js service needed repetitive boilerplate code — `connect()` calls, exporting/importing database clients, and managing hooks.
-- I had no clear insight into which database was being used the most, or which had the highest transaction load.
-- Scaling meant adding more and more custom code to my private repos.
-
-I didn’t want a pile of scattered scripts anymore.  
-I wanted a **solid engine** — something that could not only handle connections smartly but also give me useful utilities and analytics out of the box.
-
-So I started evolving **PolyMongo**.  
-What began as a **“bicycle engine”** became a **“car”**, and now it’s on its way to becoming a **“rocket engine”** — a high-performance, utility-rich database management layer built for real-world scalability.Currently it has few Bugs, Many are resolved by me own, Lets see in Future where it goes.
-This is way PolyMongo is in 2 Phases
-1. Optimisation - Just initially about Connections
-2. DX or Utility - Not that optimised code, maybe for your case you can write better code but a lot of relief for developer, alot of features  
-
-
-### 🧭 Today, PolyMongo provides:
-- ⚡ **Single TCP Connection** — One connection, many databases.
-- 🔌 **Connection Pool** — More Users, No More Single Connection now many connections.
-- 🧠 **Efficient Resource Usage** — Powered by LRU and mathematical optimization.
-- 🛠️ **Zero-Boilerplate Integration** — Easy to plug into any app.
-- 📊 **Insightful Metrics** — Track database usage and load patterns.
-- 🚀 **Future-Proof Architecture** — Built to scale like a rocket.
-
-Hope It Helps You.... 
-
 ## 📦 Installation
 
 ```bash
@@ -482,6 +440,48 @@ const db = PolyMongo.createWrapper({
 // - Query patterns (debug mode)
 // - Auto-rotation (5MB files, max 5)
 ```
+
+## 🚀 The Story Behind **PolyMongo** (Definitely Skip This Part)  
+This Skipping part is not a Typo.
+
+It all started with a simple goal: I was building a powerful ERP system — something on the scale of SAP or Zoho.
+
+As the project grew, while testing at scale testing 100s of Customer Mocks, each needed their own database. At first, I wrote a small script to quickly switch between databases whenever needed. It worked fine… until it didn’t.
+
+When hundreds or even thousands of databases were connected simultaneously, performance started to crumble. Each active user was opening new connections, and the server was struggling to keep up. The architecture was not scalable — **100 users meant 100 connections**.
+
+That’s when the idea of a **Connection Management Engine** was born.  
+In the early prerelease `v0.10.0`, PolyMongo was just a **small engine built around mathematical algorithms** like **Least Recently Used (LRU)** to reduce unnecessary connections and optimize resource usage. It was smart but still limited in how it actually handled connections.
+
+Then came the real turning point — the **`v1.0.0` release**.  
+In this version, I introduced a **single TCP connection** strategy. Instead of maintaining hundreds of open connections, PolyMongo created **just one connection** to [MongoDB](https://www.mongodb.com) and switched databases behind the scenes. This made the system far more stable, scalable, and efficient.
+
+It was fast. It was clean. And for a moment, I was happy.
+
+But as the project grew, I started noticing another pain point:
+- Every Next.js service needed repetitive boilerplate code — `connect()` calls, exporting/importing database clients, and managing hooks.
+- I had no clear insight into which database was being used the most, or which had the highest transaction load.
+- Scaling meant adding more and more custom code to my private repos.
+
+I didn’t want a pile of scattered scripts anymore.  
+I wanted a **solid engine** — something that could not only handle connections smartly but also give me useful utilities and analytics out of the box.
+
+So I started evolving **PolyMongo**.  
+What began as a **“bicycle engine”** became a **“car”**, and now it’s on its way to becoming a **“rocket engine”** — a high-performance, utility-rich database management layer built for real-world scalability.Currently it has few Bugs, Many are resolved by me own, Lets see in Future where it goes.
+This is way PolyMongo is in 2 Phases
+1. Optimisation - Just initially about Connections
+2. DX or Utility - Not that optimised code, maybe for your case you can write better code but a lot of relief for developer, alot of features  
+
+
+### 🧭 Today, PolyMongo provides:
+- ⚡ **Single TCP Connection** — One connection, many databases.
+- 🔌 **Connection Pool** — More Users, No More Single Connection now many connections.
+- 🧠 **Efficient Resource Usage** — Powered by LRU and mathematical optimization.
+- 🛠️ **Zero-Boilerplate Integration** — Easy to plug into any app.
+- 📊 **Insightful Metrics** — Track database usage and load patterns.
+- 🚀 **Future-Proof Architecture** — Built to scale like a rocket.
+
+Hope It Helps You.... 
 
 
 ## 📄 License
