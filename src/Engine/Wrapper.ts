@@ -273,23 +273,54 @@ export class PolyMongoWrapper {
     fn: (session: mongoose.ClientSession) => Promise<T>,
     options?: mongoose.mongo.TransactionOptions
   ): Promise<T> {
-    this.logManager.log("Starting transaction");
-    const primary = this.initPrimary();
-    const session = await primary.startSession();
-
     try {
-      session.startTransaction(options);
-      const result = await fn(session);
-      await session.commitTransaction();
-      this.logManager.log("Transaction committed successfully");
-      return result;
+      this.logManager.log("Starting transaction");
+      const primary = this.initPrimary();
+
+      // Check if replica set is available
+      let isReplicaSet = false;
+
+      if (primary.db) {
+        const admin = primary.db.admin();
+        try {
+          const status = await admin.command({ replSetGetStatus: 1 });
+          isReplicaSet = !!status;
+        } catch (e) {
+          this.logManager.log("Not a replica set, using manual transaction");
+        }
+      }
+
+      const session = await primary.startSession();
+
+      try {
+        if (isReplicaSet) {
+          // Use withTransaction for replica sets (auto-retry)
+          const result = await session.withTransaction(async () => {
+            return await fn(session);
+          }, options);
+          this.logManager.log("Transaction committed successfully");
+          return result;
+        } else {
+          // Manual transaction for standalone
+          session.startTransaction(options);
+          const result = await fn(session);
+          await session.commitTransaction();
+          this.logManager.log("Transaction committed successfully");
+          return result;
+        }
+      } catch (error) {
+        // Only abort if transaction is active
+        if (session.inTransaction()) {
+          await session.abortTransaction();
+        }
+        throw error;
+      } finally {
+        await session.endSession();
+      }
     } catch (error) {
-      await session.abortTransaction();
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
       this.logManager.log(`Transaction failed: ${errorMsg}`);
-      throw error;
-    } finally {
-      await session.endSession();
+      throw new Error(`Transaction failed: ${errorMsg}`);
     }
   }
 
