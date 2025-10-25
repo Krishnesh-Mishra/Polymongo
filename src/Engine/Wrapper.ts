@@ -23,6 +23,8 @@ export class PolyMongoWrapper {
   private dbSpecificConfigs?: DBSpecificConfig[];
   private statsService: StatsService;
   private scaleService: ScaleService;
+  private primaryConn?: mongoose.Connection;
+  private dbCache = new Map<string, mongoose.Connection>(); // Cache per-DB connections from primary
 
   public stats: {
     general: () => any;
@@ -48,6 +50,7 @@ export class PolyMongoWrapper {
       this.logManager = new LogManager(this.debug, options.logPath);
       this.dbSpecificConfigs = options.dbSpecific;
 
+      // Keep ConnectionManager for legacy/stats, but override model access below
       this.connectionManager = new ConnectionManager(
         this.mongoURI,
         this.maxPoolSize,
@@ -89,7 +92,7 @@ export class PolyMongoWrapper {
 
       if (!coldStart) {
         this.logManager.log("Eager initializing primary connection");
-        this.connectionManager.initPrimary();
+        this.initPrimary();
       } else {
         this.logManager.log(
           "Cold start enabled - connection will initialize on first query"
@@ -99,6 +102,29 @@ export class PolyMongoWrapper {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
       throw new Error(`Failed to initialize PolyMongoWrapper: ${errorMsg}`);
     }
+  }
+
+  private initPrimary(): mongoose.Connection {
+    if (this.primaryConn) return this.primaryConn;
+    // Use ConnectionManager to init primary, but all DBs will share it
+    this.primaryConn = this.connectionManager.initPrimary();
+    this.logManager.log("Primary connection initialized for shared use");
+    return this.primaryConn;
+  }
+
+  private getSharedConnection(dbName: string): mongoose.Connection {
+    const primary = this.initPrimary();
+    if (this.dbCache.has(dbName)) {
+      this.logManager.log(
+        `Using cached shared connection for database: ${dbName}`
+      );
+      return this.dbCache.get(dbName)!;
+    }
+
+    this.logManager.log(`Creating shared connection for database: ${dbName}`);
+    const dbConn = primary.useDb(dbName);
+    this.dbCache.set(dbName, dbConn);
+    return dbConn;
   }
 
   public onDbConnect(callback: (db: mongoose.Connection) => void): void {
@@ -138,7 +164,8 @@ export class PolyMongoWrapper {
           `Accessing model ${baseModel.modelName} for database: ${dbName}`
         );
 
-        const conn = wrapper.connectionManager.getConnection(dbName);
+        // Force shared connection (bypasses ConnectionManager.getConnection)
+        const conn = wrapper.getSharedConnection(dbName);
         const model = conn.model<T>(baseModel.modelName, baseModel.schema);
 
         const originalWatch = model.watch.bind(model);
@@ -190,7 +217,7 @@ export class PolyMongoWrapper {
       {
         get(target, prop) {
           // If accessing 'db' method, return it
-          if (prop === 'db') {
+          if (prop === "db") {
             return target.db;
           }
 
@@ -199,7 +226,7 @@ export class PolyMongoWrapper {
           const value = (defaultModel as any)[prop];
 
           // If it's a function, bind it to the model
-          if (typeof value === 'function') {
+          if (typeof value === "function") {
             return value.bind(defaultModel);
           }
 
@@ -242,56 +269,27 @@ export class PolyMongoWrapper {
     return this.connectionManager.getReadyState();
   }
 
-  async transaction<T>(
-    fn: (session: mongoose.ClientSession) => Promise<T>,
-    options?: mongoose.mongo.TransactionOptions
-  ): Promise<T> {
-    try {
-      this.logManager.log("Starting transaction");
-      const primary = this.connectionManager.initPrimary();
-      const session = await primary.startSession();
-      
-      try {
-        const result = await session.withTransaction(async () => {
-          return await fn(session);
-        }, options);
-        
-        this.logManager.log("Transaction committed successfully");
-        return result;
-      } finally {
-        await session.endSession();
-      }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      this.logManager.log(`Transaction failed: ${errorMsg}`);
-      throw new Error(`Transaction failed: ${errorMsg}`);
-    }
-  }
+  
 
   public bulkTasks = {
     copyDatabase: async (sourceDB: string, targetDB: string): Promise<void> => {
       try {
         this.logManager.log(`Copying database from ${sourceDB} to ${targetDB}`);
 
-        const sourceConn = this.connectionManager.getConnection(sourceDB);
-        const targetConn = this.connectionManager.getConnection(targetDB);
+        const sourceConn = this.getSharedConnection(sourceDB);
+        const targetConn = this.getSharedConnection(targetDB);
 
-        // Wait for connections to be ready
-        await new Promise<void>((resolve, reject) => {
-          if (sourceConn.readyState === 1) {
+        await new Promise<void>((resolve) => {
+          if (sourceConn.readyState === 1 && targetConn.readyState === 1) {
             resolve();
           } else {
-            sourceConn.once("open", () => resolve());
-            sourceConn.once("error", reject);
-          }
-        });
-
-        await new Promise<void>((resolve, reject) => {
-          if (targetConn.readyState === 1) {
-            resolve();
-          } else {
-            targetConn.once("open", () => resolve());
-            targetConn.once("error", reject);
+            const onOpen = () => {
+              if (sourceConn.readyState === 1 && targetConn.readyState === 1) {
+                resolve();
+              }
+            };
+            sourceConn.once("open", onOpen);
+            targetConn.once("open", onOpen);
           }
         });
 
@@ -340,9 +338,9 @@ export class PolyMongoWrapper {
           throw new Error("Database name is required to drop a database");
         }
         this.logManager.log(`Dropping database: ${dbName}`);
-        const conn = this.connectionManager.getConnection(dbName);
+        const conn = this.getSharedConnection(dbName);
         await conn.dropDatabase();
-        this.connectionManager.connections.delete(dbName);
+        this.dbCache.delete(dbName); // Clear cache
         this.watchManager.closeDBstream(dbName);
         this.logManager.log(`Database ${dbName} dropped successfully`);
       } catch (error) {
@@ -357,15 +355,13 @@ export class PolyMongoWrapper {
       try {
         this.logManager.log(`Exporting database: ${dbName}`);
 
-        const conn = this.connectionManager.getConnection(dbName);
+        const conn = this.getSharedConnection(dbName);
 
-        // Wait for connection
-        await new Promise<void>((resolve, reject) => {
+        await new Promise<void>((resolve) => {
           if (conn.readyState === 1) {
             resolve();
           } else {
             conn.once("open", () => resolve());
-            conn.once("error", reject);
           }
         });
 
@@ -411,15 +407,13 @@ export class PolyMongoWrapper {
           throw new Error("Invalid import data format");
         }
 
-        const conn = this.connectionManager.getConnection(dbName);
+        const conn = this.getSharedConnection(dbName);
 
-        // Wait for connection
-        await new Promise<void>((resolve, reject) => {
+        await new Promise<void>((resolve) => {
           if (conn.readyState === 1) {
             resolve();
           } else {
             conn.once("open", () => resolve());
-            conn.once("error", reject);
           }
         });
 
@@ -458,6 +452,7 @@ export class PolyMongoWrapper {
         throw new Error(`Failed to import database: ${errorMsg}`);
       }
     },
+
     exportStream: (dbName: string): NodeJS.ReadableStream => {
       const { Readable } = require("stream");
 
@@ -470,13 +465,12 @@ export class PolyMongoWrapper {
         try {
           this.logManager.log(`Starting stream export for: ${dbName}`);
 
-          const conn = this.connectionManager.getConnection(dbName);
+          const conn = this.getSharedConnection(dbName);
 
-          await new Promise<void>((resolve, reject) => {
+          await new Promise<void>((resolve) => {
             if (conn.readyState === 1) resolve();
             else {
               conn.once("open", () => resolve());
-              conn.once("error", reject);
             }
           });
 
@@ -539,13 +533,12 @@ export class PolyMongoWrapper {
         try {
           this.logManager.log(`Starting stream import to: ${dbName}`);
 
-          const conn = this.connectionManager.getConnection(dbName);
+          const conn = this.getSharedConnection(dbName);
 
-          await new Promise<void>((resolveConn, rejectConn) => {
+          await new Promise<void>((resolveConn) => {
             if (conn.readyState === 1) resolveConn();
             else {
               conn.once("open", () => resolveConn());
-              conn.once("error", rejectConn);
             }
           });
 
@@ -624,7 +617,9 @@ export class PolyMongoWrapper {
       try {
         this.logManager.log("Actions closeAll called");
         this.watchManager.closeAllWatches();
+        this.dbCache.clear();
         await this.connectionManager.closeAll();
+        this.primaryConn = undefined;
       } catch (error) {
         const errorMsg =
           error instanceof Error ? error.message : "Unknown error";
@@ -637,7 +632,9 @@ export class PolyMongoWrapper {
       try {
         this.logManager.log("Actions forceCloseAll called");
         this.watchManager.closeAllWatches();
+        this.dbCache.clear();
         await this.connectionManager.forceCloseAll();
+        this.primaryConn = undefined;
       } catch (error) {
         const errorMsg =
           error instanceof Error ? error.message : "Unknown error";
