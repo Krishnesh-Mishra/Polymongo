@@ -23,9 +23,9 @@ const analyticsConn = await mongoose.createConnection(analyticsURI);
 // ... manual pool management, error handling, cleanup ...
 
 // After: One line does it all
-const wrapper = PolyMongo.createWrapper({ mongoURI, defaultDB: 'main' });
+const wrapper = PolyMongo.createWrapper({ mongoURI, defaultDB: "main" });
 const User = wrapper.wrapModel(UserModel);
-await User.db('analytics').find(); // That's it.
+await User.db("analytics").find(); // That's it.
 ```
 
 ## 🎯 Key Features
@@ -41,7 +41,6 @@ await User.db('analytics').find(); // That's it.
 - 💾 **Bulk Operations** - Export/import entire databases with streaming
 - 🛡️ **Production Ready** - Graceful shutdown, error recovery, comprehensive logging
 
-
 ## 📦 Installation
 
 ```bash
@@ -51,34 +50,34 @@ npm install polymongo
 ## 🚀 Quick Start (60 seconds)
 
 ```typescript
-import { PolyMongo } from 'polymongo';
-import mongoose from 'mongoose';
+import { PolyMongo } from "polymongo";
+import mongoose from "mongoose";
 
 // 1. Define your schema
 const userSchema = new mongoose.Schema({
   name: String,
   email: String,
-  role: String
+  role: String,
 });
 
 // 2. Initialize PolyMongo
 const db = PolyMongo.createWrapper({
-  mongoURI: 'mongodb://localhost:27017',
-  defaultDB: 'production',
+  mongoURI: "mongodb://localhost:27017",
+  defaultDB: "production",
   maxPoolSize: 10,
-  debug: true
+  debug: true,
 });
 
 // 3. Wrap your model
-const User = mongoose.model('User', userSchema);
+const User = mongoose.model("User", userSchema);
 const WrappedUser = db.wrapModel(User);
 
 // 4. Use it anywhere - production DB
-const users = await WrappedUser.find({ role: 'admin' });
+const users = await WrappedUser.find({ role: "admin" });
 
 // 5. Or switch databases on-the-fly
-const testUsers = await WrappedUser.db('testing').find();
-const analyticsUsers = await WrappedUser.db('analytics').find();
+const testUsers = await WrappedUser.db("testing").find();
+const analyticsUsers = await WrappedUser.db("analytics").find();
 ```
 
 **That's it!** No connection management, no pool configuration, no cleanup code.
@@ -86,38 +85,43 @@ const analyticsUsers = await WrappedUser.db('analytics').find();
 ## 💡 Common Use Cases
 
 ### Multi-Tenant Applications
+
 ```typescript
 // Each tenant gets isolated database with optimized pooling
 const TenantModel = db.wrapModel(DataModel);
-const tenant1Data = await TenantModel.db('tenant_1').find();
-const tenant2Data = await TenantModel.db('tenant_2').find();
+const tenant1Data = await TenantModel.db("tenant_1").find();
+const tenant2Data = await TenantModel.db("tenant_2").find();
 ```
 
 ### Analytics Separation
+
 ```typescript
 // Configure different pools for production vs analytics
 const db = PolyMongo.createWrapper({
-  mongoURI: 'mongodb://main-cluster:27017',
-  defaultDB: 'production',
-  dbSpecific: [{
-    dbName: 'analytics',
-    mongoURI: 'mongodb://analytics-cluster:27017',
-    options: {
-      maxConnections: 50,  // Higher pool for analytics
-      autoClose: true,
-      ttl: 300000  // Close after 5min idle
-    }
-  }]
+  mongoURI: "mongodb://main-cluster:27017",
+  defaultDB: "production",
+  dbSpecific: [
+    {
+      dbName: "analytics",
+      mongoURI: "mongodb://analytics-cluster:27017",
+      options: {
+        maxConnections: 50, // Higher pool for analytics
+        autoClose: true,
+        ttl: 300000, // Close after 5min idle
+      },
+    },
+  ],
 });
 ```
 
 ### Testing Environments
+
 ```typescript
 // Separate test database with cold start
-db.scale.setDB(['test_db'], {
-  coldStart: true,  // Only connect when first accessed
+db.scale.setDB(["test_db"], {
+  coldStart: true, // Only connect when first accessed
   autoClose: true,
-  ttl: 60000  // Close after 1min idle
+  ttl: 60000, // Close after 1min idle
 });
 ```
 
@@ -127,14 +131,14 @@ db.scale.setDB(['test_db'], {
 
 ```typescript
 interface PolyMongoOptions {
-  mongoURI: string;              // Primary MongoDB connection URI
-  defaultDB?: string;            // Default database name
-  maxPoolSize?: number;          // Max connections per pool (default: 10)
-  minFreeConnections?: number;   // Min idle connections (default: 0)
-  idleTimeoutMS?: number;        // Connection idle timeout
-  coldStart?: boolean;           // Lazy connection (default: true)
-  debug?: boolean;               // Enable debug logging
-  logPath?: string;              // Custom log directory
+  mongoURI: string; // Primary MongoDB connection URI
+  defaultDB?: string; // Default database name
+  maxPoolSize?: number; // Max connections per pool (default: 10)
+  minFreeConnections?: number; // Min idle connections (default: 0)
+  idleTimeoutMS?: number; // Connection idle timeout
+  coldStart?: boolean; // Lazy connection (default: true)
+  debug?: boolean; // Enable debug logging
+  logPath?: string; // Custom log directory
   dbSpecific?: DBSpecificConfig[]; // Per-database configuration
 }
 ```
@@ -158,16 +162,16 @@ await WrappedModel.db('archive').deleteMany({ old: true });
 
 ```typescript
 // Configure database before first use
-db.scale.setDB(['new_database'], {
+db.scale.setDB(["new_database"], {
   maxConnections: 20,
   autoClose: true,
   ttl: 300000,
-  coldStart: false  // Connect immediately
+  coldStart: false, // Connect immediately
 });
 
 // Or connect explicitly
-await db.scale.connectDB(['new_database'], {
-  maxConnections: 15
+await db.scale.connectDB(["new_database"], {
+  maxConnections: 15,
 });
 ```
 
@@ -176,16 +180,16 @@ await db.scale.connectDB(['new_database'], {
 ```typescript
 // Global hooks for all connections
 db.onDbConnect((connection) => {
-  console.log('Connected:', connection.name);
+  console.log("Connected:", connection.name);
 });
 
 db.onDbDisconnect((connection) => {
-  console.log('Disconnected:', connection.name);
+  console.log("Disconnected:", connection.name);
 });
 
 // Database-specific hooks
-db.onTheseDBConnect(['analytics', 'reporting'], (connection) => {
-  console.log('Analytics cluster connected');
+db.onTheseDBConnect(["analytics", "reporting"], (connection) => {
+  console.log("Analytics cluster connected");
 });
 ```
 
@@ -203,7 +207,7 @@ console.log(stats);
 // }
 
 // Get database-specific stats
-const dbStats = await db.stats.db('analytics');
+const dbStats = await db.stats.db("analytics");
 console.log(dbStats);
 // {
 //   sizeMb: 1250.5,
@@ -220,54 +224,56 @@ const databases = await db.stats.listDatabases();
 
 ```typescript
 // Automatic session management with rollback on error
-await wrapper.safeTransaction(async () => {
-  const firm = await Firm.tdb('admin').find({}); 
-  await User.tdb('UserDB').create({
-    username: "admin",
-    password: "admin@123",
-  });
+await wrapper.transaction(async () => {
+  const firm = await Firm.db("admin").find({}, { session });
+  await User.tdb("UserDB").create(
+    {
+      username: "admin",
+      password: "admin@123",
+    },
+    { session }
+  );
 });
 ```
-- Inside safeTransaction you are not allowed to use `.db()` but use `.tdb()` inside. Both work very same just t stands for Transaction
-- This uses Custom ROllback hence, normal mongoose Session options are not present as Native Mongoose OR MongoDB traansaction doesnt support Multi-DB transaction 
+
 ---
 
 ### Bulk Operations
 
 ```typescript
 // Export entire database
-const exportData = await db.bulkTasks.export('production');
+const exportData = await db.bulkTasks.export("production");
 
 // Import to different database
-await db.bulkTasks.import('backup', exportData);
+await db.bulkTasks.import("backup", exportData);
 
 // Stream large databases (memory efficient)
-const stream = db.bulkTasks.exportStream('analytics');
-stream.pipe(fs.createWriteStream('backup.json'));
+const stream = db.bulkTasks.exportStream("analytics");
+stream.pipe(fs.createWriteStream("backup.json"));
 
 // Import from stream
-const readStream = fs.createReadStream('backup.json');
-await db.bulkTasks.importStream('restored', readStream);
+const readStream = fs.createReadStream("backup.json");
+await db.bulkTasks.importStream("restored", readStream);
 
 // Copy database
-await db.bulkTasks.copyDatabase('production', 'staging');
+await db.bulkTasks.copyDatabase("production", "staging");
 
 // Drop database
-await db.bulkTasks.dropDatabase('old_data');
+await db.bulkTasks.dropDatabase("old_data");
 ```
 
 ### Watch Streams
 
 ```typescript
 // Watch streams are automatically managed
-const changeStream = WrappedModel.db('production').watch();
+const changeStream = WrappedModel.db("production").watch();
 
-changeStream.on('change', (change) => {
-  console.log('Document changed:', change);
+changeStream.on("change", (change) => {
+  console.log("Document changed:", change);
 });
 
 // Cleanup specific database streams
-db.actions.closeDBstream('production');
+db.actions.closeDBstream("production");
 
 // Or cleanup all watch streams
 db.actions.closeAllWatches();
@@ -292,39 +298,39 @@ await db.actions.forceCloseAll();
 
 ```typescript
 const db = PolyMongo.createWrapper({
-  mongoURI: 'mongodb://primary:27017',
-  defaultDB: 'main',
+  mongoURI: "mongodb://primary:27017",
+  defaultDB: "main",
   maxPoolSize: 10,
-  
+
   dbSpecific: [
     {
-      dbName: 'analytics',
-      mongoURI: 'mongodb://analytics-cluster:27017', // Different cluster
+      dbName: "analytics",
+      mongoURI: "mongodb://analytics-cluster:27017", // Different cluster
       options: {
-        maxConnections: 50,    // Larger pool
-        autoClose: false,      // Keep alive
-        coldStart: false       // Eager initialization
-      }
+        maxConnections: 50, // Larger pool
+        autoClose: false, // Keep alive
+        coldStart: false, // Eager initialization
+      },
     },
     {
-      dbName: 'cache',
+      dbName: "cache",
       options: {
         maxConnections: 5,
         autoClose: true,
-        ttl: 120000,          // Close after 2min idle
-        coldStart: true       // Lazy initialization
-      }
+        ttl: 120000, // Close after 2min idle
+        coldStart: true, // Lazy initialization
+      },
     },
     {
-      dbName: 'logs',
-      mongoURI: 'mongodb://logs-cluster:27017',
+      dbName: "logs",
+      mongoURI: "mongodb://logs-cluster:27017",
       options: {
         maxConnections: 30,
         autoClose: true,
-        ttl: 600000           // Close after 10min idle
-      }
-    }
-  ]
+        ttl: 600000, // Close after 10min idle
+      },
+    },
+  ],
 });
 ```
 
@@ -332,20 +338,20 @@ const db = PolyMongo.createWrapper({
 
 ```typescript
 const db = PolyMongo.createWrapper({
-  mongoURI: 'mongodb://localhost:27017',
-  defaultDB: 'main',
-  
+  mongoURI: "mongodb://localhost:27017",
+  defaultDB: "main",
+
   // Pool configuration
-  maxPoolSize: 20,              // Max connections per pool
-  minFreeConnections: 5,        // Min idle connections
-  idleTimeoutMS: 300000,        // 5min idle timeout
-  
+  maxPoolSize: 20, // Max connections per pool
+  minFreeConnections: 5, // Min idle connections
+  idleTimeoutMS: 300000, // 5min idle timeout
+
   // Performance
-  coldStart: false,             // Connect immediately
-  
+  coldStart: false, // Connect immediately
+
   // Debugging
-  debug: true,                  // Enable logging
-  logPath: '/var/log/polymongo' // Custom log path
+  debug: true, // Enable logging
+  logPath: "/var/log/polymongo", // Custom log path
 });
 ```
 
@@ -357,14 +363,14 @@ const db = PolyMongo.createWrapper({
 // Before (Mongoose)
 const conn1 = await mongoose.createConnection(uri1);
 const conn2 = await mongoose.createConnection(uri2);
-const User1 = conn1.model('User', userSchema);
-const User2 = conn2.model('User', userSchema);
+const User1 = conn1.model("User", userSchema);
+const User2 = conn2.model("User", userSchema);
 
 // After (PolyMongo)
 const db = PolyMongo.createWrapper({ mongoURI: uri1 });
-const User = db.wrapModel(mongoose.model('User', userSchema));
+const User = db.wrapModel(mongoose.model("User", userSchema));
 const users1 = await User.find();
-const users2 = await User.db('database2').find();
+const users2 = await User.db("database2").find();
 ```
 
 ### From Native Driver
@@ -372,24 +378,24 @@ const users2 = await User.db('database2').find();
 ```typescript
 // Before (Native Driver)
 const client = await MongoClient.connect(uri);
-const db1 = client.db('db1');
-const db2 = client.db('db2');
+const db1 = client.db("db1");
+const db2 = client.db("db2");
 
 // After (PolyMongo)
 const db = PolyMongo.createWrapper({ mongoURI: uri });
 const Model = db.wrapModel(YourModel);
-await Model.db('db1').find();
-await Model.db('db2').find();
+await Model.db("db1").find();
+await Model.db("db2").find();
 ```
 
 ## 📊 Performance Benchmarks
 
-| Operation | Native Mongoose | PolyMongo | Difference |
-|-----------|----------------|-----------|------------|
-| Single DB Query | 12ms | 12ms | No overhead |
+| Operation       | Native Mongoose | PolyMongo      | Difference      |
+| --------------- | --------------- | -------------- | --------------- |
+| Single DB Query | 12ms            | 12ms           | No overhead     |
 | Multi DB Switch | 45ms (new conn) | 0.1ms (cached) | **450x faster** |
-| Connection Pool | Manual | Automatic | **Zero config** |
-| Memory (10 DBs) | ~50MB | ~15MB | **70% less** |
+| Connection Pool | Manual          | Automatic      | **Zero config** |
+| Memory (10 DBs) | ~50MB           | ~15MB          | **70% less**    |
 
 ## 🏢 Production Ready
 
@@ -397,14 +403,14 @@ await Model.db('db2').find();
 
 ```typescript
 try {
-  const users = await WrappedUser.db('production').find();
+  const users = await WrappedUser.db("production").find();
 } catch (error) {
   // PolyMongo handles:
   // - Connection failures with auto-retry
   // - Authentication errors
   // - Network timeouts
   // - Pool exhaustion
-  console.error('Query failed:', error.message);
+  console.error("Query failed:", error.message);
 }
 ```
 
@@ -413,7 +419,7 @@ try {
 ```typescript
 // Check connection status
 if (db.isConnected()) {
-  console.log('Database ready');
+  console.log("Database ready");
 }
 
 // Get connection state
@@ -423,7 +429,7 @@ const state = db.getConnectionState();
 // Monitor pool health
 const stats = db.stats.general();
 if (stats.totalConnectionsAcrossPools > threshold) {
-  console.warn('Connection pool stress');
+  console.warn("Connection pool stress");
 }
 ```
 
@@ -432,9 +438,9 @@ if (stats.totalConnectionsAcrossPools > threshold) {
 ```typescript
 // Comprehensive Winston-based logging
 const db = PolyMongo.createWrapper({
-  mongoURI: 'mongodb://localhost:27017',
-  debug: true,  // Console + file logging
-  logPath: '/var/log/app'  // Custom path
+  mongoURI: "mongodb://localhost:27017",
+  debug: true, // Console + file logging
+  logPath: "/var/log/app", // Custom path
 });
 
 // Logs include:
@@ -445,7 +451,8 @@ const db = PolyMongo.createWrapper({
 // - Auto-rotation (5MB files, max 5)
 ```
 
-## 🚀 The Story Behind **PolyMongo** (Definitely Skip This Part)  
+## 🚀 The Story Behind **PolyMongo** (Definitely Skip This Part)
+
 This Skipping part is not a Typo.
 
 It all started with a simple goal: I was building a powerful ERP system — something on the scale of SAP or Zoho.
@@ -463,6 +470,7 @@ In this version, I introduced a **single TCP connection** strategy. Instead of m
 It was fast. It was clean. And for a moment, I was happy.
 
 But as the project grew, I started noticing another pain point:
+
 - Every Next.js service needed repetitive boilerplate code — `connect()` calls, exporting/importing database clients, and managing hooks.
 - I had no clear insight into which database was being used the most.
 - Scaling meant adding more and more custom code to my private repos.
@@ -473,11 +481,12 @@ I wanted a **solid engine** — something that could not only handle connections
 So I started evolving **PolyMongo**.  
 What began as a **“bicycle engine”** became a **“car”**, and now it’s on its way to becoming a **“rocket engine”** — a high-performance, utility-rich database management layer built for real-world scalability.Currently it has few Bugs, Many are resolved by me own, Lets see in Future where it goes.
 This is way PolyMongo is in 2 Phases
-1. Optimisation - Just initially about Connections
-2. DX or Utility - Not that optimised code, maybe for your case you can write better code but a lot of relief for developer, alot of features  
 
+1. Optimisation - Just initially about Connections
+2. DX or Utility - Not that optimised code, maybe for your case you can write better code but a lot of relief for developer, alot of features
 
 ### 🧭 Today, PolyMongo provides:
+
 - ⚡ **Single TCP Connection** — One connection, many databases.
 - 🔌 **Connection Pool** — More Users, No More Single Connection now many connections.
 - 🧠 **Efficient Resource Usage** — Powered by LRU and mathematical optimization.
@@ -485,8 +494,7 @@ This is way PolyMongo is in 2 Phases
 - 📊 **Insightful Metrics** — Track database usage and load patterns.
 - 🚀 **Future-Proof Architecture** — Built to scale like a rocket.
 
-Hope It Helps You.... 
-
+Hope It Helps You....
 
 ## 📄 License
 
@@ -495,6 +503,7 @@ MIT © Krishnesh Mishra
 ## 🙏 Acknowledgments
 
 Built with ❤️ using:
+
 - [Mongoose](https://mongoosejs.com/) - MongoDB object modeling
 - [Winston](https://github.com/winstonjs/winston) - Logging framework
 
