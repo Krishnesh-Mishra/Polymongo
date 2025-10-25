@@ -36,7 +36,7 @@ await User.db('analytics').find(); // That's it.
 - 🔌 **Separate Clusters** - Connect different databases to different MongoDB instances
 - 📊 **Real-time Monitoring** - Track pool usage, connection states, and performance
 - 🪝 **Lifecycle Hooks** - Execute callbacks on connect/disconnect events
-- 🔒 **Transaction Support** - Built-in session management with auto-rollback
+- 🔒 **MultiDB Transaction Support** - Built-in session management with auto-rollback
 - 📡 **Watch Stream Management** - Automatic cleanup of change streams
 - 💾 **Bulk Operations** - Export/import entire databases with streaming
 - 🛡️ **Production Ready** - Graceful shutdown, error recovery, comprehensive logging
@@ -220,12 +220,17 @@ const databases = await db.stats.listDatabases();
 
 ```typescript
 // Automatic session management with rollback on error
-const result = await db.transaction(async (session) => {
-  await User.create([{ name: 'John' }], { session });
-  await Order.create([{ userId: '123' }], { session });
-  return { success: true };
+await wrapper.safeTransaction(async () => {
+  const firm = await Firm.tdb('admin').find({}); 
+  await User.tdb('UserDB').create({
+    username: "admin",
+    password: "admin@123",
+  });
 });
 ```
+- Inside safeTransaction you are not allowed to use `.db()` but use `.tdb()` inside. Both work very same just t stands for Transaction
+- This uses Custom ROllback hence, normal mongoose Session options are not present as Native Mongoose OR MongoDB traansaction doesnt support Multi-DB transaction 
+---
 
 ### Bulk Operations
 
@@ -459,7 +464,7 @@ It was fast. It was clean. And for a moment, I was happy.
 
 But as the project grew, I started noticing another pain point:
 - Every Next.js service needed repetitive boilerplate code — `connect()` calls, exporting/importing database clients, and managing hooks.
-- I had no clear insight into which database was being used the most, or which had the highest transaction load.
+- I had no clear insight into which database was being used the most.
 - Scaling meant adding more and more custom code to my private repos.
 
 I didn’t want a pile of scattered scripts anymore.  

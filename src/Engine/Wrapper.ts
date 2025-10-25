@@ -23,6 +23,13 @@ export class PolyMongoWrapper {
   private dbSpecificConfigs?: DBSpecificConfig[];
   private statsService: StatsService;
   private scaleService: ScaleService;
+
+  // Transaction context for tdb operations
+  private transactionContext: {
+    active: boolean;
+    operations: Array<{ undo: () => Promise<void> }>;
+  } = { active: false, operations: [] };
+
   public stats: {
     general: () => any;
     db: (dbName?: string) => Promise<any>;
@@ -179,18 +186,123 @@ export class PolyMongoWrapper {
       }
     };
 
+    const createTransactionalProxy = (dbName: string): any => {
+      const model = getModelForDB(dbName);
+
+      return new Proxy(model, {
+        get(target, prop) {
+          const original = (target as any)[prop];
+
+          if (typeof original !== "function") return original;
+
+          return async function (...args: any[]) {
+            if (!wrapper.transactionContext.active) {
+              throw new Error("tdb can only be used inside safeTransaction");
+            }
+
+            // Handle create/insertMany operations
+            if (prop === "create" || prop === "insertMany") {
+              const result = await original.apply(target, args);
+              const ids = Array.isArray(result)
+                ? result.map((r: any) => r._id)
+                : [result._id];
+
+              wrapper.transactionContext.operations.push({
+                undo: async () => {
+                  await model.deleteMany({ _id: { $in: ids } });
+                  wrapper.logManager.log(
+                    `Rolled back ${prop} for ${baseModel.modelName} in ${dbName}`
+                  );
+                },
+              });
+
+              wrapper.logManager.log(
+                `Tracked ${prop} operation for ${baseModel.modelName} in ${dbName}`
+              );
+              return result;
+            }
+
+            // Handle update operations
+            if (
+              prop === "updateOne" ||
+              prop === "updateMany" ||
+              prop === "findOneAndUpdate"
+            ) {
+              const filter = args[0];
+              const originals = await model.find(filter).lean();
+              const result = await original.apply(target, args);
+
+              if (originals.length > 0) {
+                wrapper.transactionContext.operations.push({
+                  undo: async () => {
+                    for (const doc of originals) {
+                      await model.replaceOne({ _id: doc._id }, doc);
+                    }
+                    wrapper.logManager.log(
+                      `Rolled back ${prop} for ${baseModel.modelName} in ${dbName}`
+                    );
+                  },
+                });
+
+                wrapper.logManager.log(
+                  `Tracked ${prop} operation for ${baseModel.modelName} in ${dbName}`
+                );
+              }
+
+              return result;
+            }
+
+            // Handle delete operations
+            if (
+              prop === "deleteOne" ||
+              prop === "deleteMany" ||
+              prop === "findOneAndDelete"
+            ) {
+              const filter = args[0];
+              const originals = await model.find(filter).lean();
+              const result = await original.apply(target, args);
+
+              if (originals.length > 0) {
+                wrapper.transactionContext.operations.push({
+                  undo: async () => {
+                    await model.insertMany(originals);
+                    wrapper.logManager.log(
+                      `Rolled back ${prop} for ${baseModel.modelName} in ${dbName}`
+                    );
+                  },
+                });
+
+                wrapper.logManager.log(
+                  `Tracked ${prop} operation for ${baseModel.modelName} in ${dbName}`
+                );
+              }
+
+              return result;
+            }
+
+            // For read operations or other methods, just execute normally
+            return await original.apply(target, args);
+          };
+        },
+      });
+    };
+
     // Create a Proxy that intercepts all property access
     const wrappedModel = new Proxy(
       {
         db: (dbName?: string): mongoose.Model<T> => {
           return getModelForDB(dbName ?? wrapper.defaultDB);
         },
+        tdb: (dbName?: string): any => {
+          const targetDB = dbName ?? wrapper.defaultDB;
+          return createTransactionalProxy(targetDB);
+        },
       } as any,
       {
         get(target, prop) {
-          // If accessing 'db' method, return it
-          if (prop === "db") {
-            return target.db;
+          // If accessing 'db' or 'tdb' method, return it
+          if (prop === "db" || prop === "tdb") {
+            return target[prop];
           }
 
           // For any other property/method, get the default model and access it
@@ -249,28 +361,14 @@ export class PolyMongoWrapper {
       this.logManager.log("Starting transaction");
       const primary = this.connectionManager.initPrimary();
       const session = await primary.startSession();
-      let committed = false;
+
       try {
-        session.startTransaction(options);
-        const result = await fn(session);
-        await session.commitTransaction();
-        committed = true;
+        const result = await session.withTransaction(async () => {
+          return await fn(session);
+        }, options);
+
         this.logManager.log("Transaction committed successfully");
         return result;
-      } catch (error) {
-        if (!committed) {
-          try {
-            await session.abortTransaction();
-            this.logManager.log(
-              `Transaction aborted: ${error instanceof Error ? error.message : "Unknown error"}`
-            );
-          } catch (abortError) {
-            this.logManager.log(
-              `Abort failed (already committed?): ${abortError instanceof Error ? abortError.message : "Unknown error"}`
-            );
-          }
-        }
-        throw error;
       } finally {
         await session.endSession();
       }
@@ -278,6 +376,46 @@ export class PolyMongoWrapper {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
       this.logManager.log(`Transaction failed: ${errorMsg}`);
       throw new Error(`Transaction failed: ${errorMsg}`);
+    }
+  }
+
+  async safeTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.transactionContext.active) {
+      throw new Error("Nested transactions are not supported");
+    }
+
+    this.transactionContext = { active: true, operations: [] };
+    this.logManager.log("Starting safe transaction with rollback support");
+
+    try {
+      const result = await fn();
+      this.logManager.log(
+        `Safe transaction completed successfully with ${this.transactionContext.operations.length} tracked operations`
+      );
+      return result;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      this.logManager.log(
+        `Safe transaction failed: ${errorMsg}. Rolling back ${this.transactionContext.operations.length} operations...`
+      );
+
+      // Rollback in reverse order
+      for (let i = this.transactionContext.operations.length - 1; i >= 0; i--) {
+        try {
+          await this.transactionContext.operations[i].undo();
+        } catch (rollbackError) {
+          const rollbackMsg =
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : "Unknown error";
+          this.logManager.log(`Rollback operation ${i} failed: ${rollbackMsg}`);
+        }
+      }
+
+      this.logManager.log("Rollback completed");
+      throw new Error(`Safe transaction failed: ${errorMsg}`);
+    } finally {
+      this.transactionContext = { active: false, operations: [] };
     }
   }
 
