@@ -9,10 +9,6 @@ import { StatsService } from "./services/StatsService";
 import { ScaleService } from "./services/ScaleService";
 import { DBSpecificConfig } from "../types/scale.types";
 
-
-
-
-
 export class PolyMongoWrapper {
   private mongoURI: string;
   private defaultDB: string;
@@ -42,7 +38,7 @@ export class PolyMongoWrapper {
       validateOptions(options);
       this.hookManager = new HookManager();
       this.mongoURI = options.mongoURI;
-      this.defaultDB = options.defaultDB ?? 'default';
+      this.defaultDB = options.defaultDB ?? "default";
       this.maxPoolSize = options.maxPoolSize ?? 10;
       this.minFreeConnections = options.minFreeConnections ?? 0;
       this.idleTimeoutMS = options.idleTimeoutMS ?? undefined;
@@ -62,14 +58,21 @@ export class PolyMongoWrapper {
       );
 
       this.watchManager = new WatchManager(this.logManager);
-      this.statsService = new StatsService(this.connectionManager, this.logManager, this.getPoolStats.bind(this), this.defaultDB);
-      this.scaleService = new ScaleService(this.connectionManager, this.logManager);
+      this.statsService = new StatsService(
+        this.connectionManager,
+        this.logManager,
+        this.getPoolStats.bind(this),
+        this.defaultDB
+      );
+      this.scaleService = new ScaleService(
+        this.connectionManager,
+        this.logManager
+      );
 
       this.stats = {
         general: this.statsService.general.bind(this.statsService),
         db: this.statsService.db.bind(this.statsService),
         listDatabases: this.statsService.listDatabases.bind(this.statsService),
-        
       };
 
       this.scale = {
@@ -78,7 +81,7 @@ export class PolyMongoWrapper {
       };
 
       this.logManager.log(
-        `Creating PolyMongoWrapper with options: ${JSON.stringify(options)}`,
+        `Creating PolyMongoWrapper with options: ${JSON.stringify(options)}`
       );
 
       const coldStart = options.coldStart ?? true;
@@ -88,7 +91,7 @@ export class PolyMongoWrapper {
         this.connectionManager.initPrimary();
       } else {
         this.logManager.log(
-          "Cold start enabled - connection will initialize on first query",
+          "Cold start enabled - connection will initialize on first query"
         );
       }
     } catch (error) {
@@ -105,16 +108,22 @@ export class PolyMongoWrapper {
     this.hookManager.onDbDisconnect(callback);
   }
 
-  public onTheseDBConnect(dbNames: string[], callback: (db: mongoose.Connection) => void): void {
+  public onTheseDBConnect(
+    dbNames: string[],
+    callback: (db: mongoose.Connection) => void
+  ): void {
     this.hookManager.onTheseDBConnect(dbNames, callback);
   }
 
-  public onTheseDBDisconnect(dbNames: string[], callback: (db: mongoose.Connection) => void): void {
+  public onTheseDBDisconnect(
+    dbNames: string[],
+    callback: (db: mongoose.Connection) => void
+  ): void {
     this.hookManager.onTheseDBDisconnect(dbNames, callback);
   }
 
   wrapModel<T extends mongoose.Document>(
-    baseModel: mongoose.Model<T>,
+    baseModel: mongoose.Model<T>
   ): WrappedModel<T> {
     const wrapper = this;
 
@@ -125,7 +134,7 @@ export class PolyMongoWrapper {
     const getModelForDB = (dbName: string): mongoose.Model<T> => {
       try {
         wrapper.logManager.log(
-          `Accessing model ${baseModel.modelName} for database: ${dbName}`,
+          `Accessing model ${baseModel.modelName} for database: ${dbName}`
         );
 
         const conn = wrapper.connectionManager.getConnection(dbName);
@@ -143,7 +152,7 @@ export class PolyMongoWrapper {
 
             stream.on("error", (error) => {
               wrapper.logManager.log(
-                `Watch stream error for ${dbName}: ${error.message}`,
+                `Watch stream error for ${dbName}: ${error.message}`
               );
               wrapper.watchManager.removeStream(dbName, stream);
             });
@@ -153,7 +162,7 @@ export class PolyMongoWrapper {
             const errorMsg =
               error instanceof Error ? error.message : "Unknown error";
             wrapper.logManager.log(
-              `Failed to create watch stream: ${errorMsg}`,
+              `Failed to create watch stream: ${errorMsg}`
             );
             throw new Error(`Failed to create watch stream: ${errorMsg}`);
           }
@@ -164,7 +173,7 @@ export class PolyMongoWrapper {
         const errorMsg =
           error instanceof Error ? error.message : "Unknown error";
         wrapper.logManager.log(
-          `Error accessing model ${baseModel.modelName} for ${dbName}: ${errorMsg}`,
+          `Error accessing model ${baseModel.modelName} for ${dbName}: ${errorMsg}`
         );
         throw new Error(`Failed to access model: ${errorMsg}`);
       }
@@ -180,7 +189,7 @@ export class PolyMongoWrapper {
       {
         get(target, prop) {
           // If accessing 'db' method, return it
-          if (prop === 'db') {
+          if (prop === "db") {
             return target.db;
           }
 
@@ -189,7 +198,7 @@ export class PolyMongoWrapper {
           const value = (defaultModel as any)[prop];
 
           // If it's a function, bind it to the model
-          if (typeof value === 'function') {
+          if (typeof value === "function") {
             return value.bind(defaultModel);
           }
 
@@ -208,10 +217,16 @@ export class PolyMongoWrapper {
     if (!pool) return null;
 
     return {
-      totalConnections: pool.totalConnectionCount ?? pool.totalCreatedConnectionCount ?? 0,
-      availableConnections: pool.availableConnectionCount ?? pool.totalAvailableCount ?? 0,
+      totalConnections:
+        pool.totalConnectionCount ?? pool.totalCreatedConnectionCount ?? 0,
+      availableConnections:
+        pool.availableConnectionCount ?? pool.totalAvailableCount ?? 0,
       inUseConnections: pool.inUseConnectionCount ?? pool.totalInUseCount ?? 0,
-      waitQueueSize: pool.waitQueueSize ?? pool.waitingClientsCount ?? pool.waitQueueMemberCount ?? 0,
+      waitQueueSize:
+        pool.waitQueueSize ??
+        pool.waitingClientsCount ??
+        pool.waitQueueMemberCount ??
+        0,
       maxPoolSize: pool.maxPoolSize ?? this.maxPoolSize ?? 0,
       minPoolSize: pool.minPoolSize ?? this.minFreeConnections ?? 0,
       maxIdleTimeMS: pool.maxIdleTimeMS ?? this.idleTimeoutMS,
@@ -234,17 +249,27 @@ export class PolyMongoWrapper {
       this.logManager.log("Starting transaction");
       const primary = this.connectionManager.initPrimary();
       const session = await primary.startSession();
+      let committed = false;
       try {
         session.startTransaction(options);
         const result = await fn(session);
         await session.commitTransaction();
+        committed = true;
         this.logManager.log("Transaction committed successfully");
         return result;
       } catch (error) {
-        await session.abortTransaction();
-        this.logManager.log(
-          `Transaction aborted: ${error instanceof Error ? error.message : "Unknown error"}`
-        );
+        if (!committed) {
+          try {
+            await session.abortTransaction();
+            this.logManager.log(
+              `Transaction aborted: ${error instanceof Error ? error.message : "Unknown error"}`
+            );
+          } catch (abortError) {
+            this.logManager.log(
+              `Abort failed (already committed?): ${abortError instanceof Error ? abortError.message : "Unknown error"}`
+            );
+          }
+        }
         throw error;
       } finally {
         await session.endSession();
@@ -255,8 +280,6 @@ export class PolyMongoWrapper {
       throw new Error(`Transaction failed: ${errorMsg}`);
     }
   }
-
-
 
   public bulkTasks = {
     copyDatabase: async (sourceDB: string, targetDB: string): Promise<void> => {
@@ -271,8 +294,8 @@ export class PolyMongoWrapper {
           if (sourceConn.readyState === 1) {
             resolve();
           } else {
-            sourceConn.once('open', () => resolve());
-            sourceConn.once('error', reject);
+            sourceConn.once("open", () => resolve());
+            sourceConn.once("error", reject);
           }
         });
 
@@ -280,8 +303,8 @@ export class PolyMongoWrapper {
           if (targetConn.readyState === 1) {
             resolve();
           } else {
-            targetConn.once('open', () => resolve());
-            targetConn.once('error', reject);
+            targetConn.once("open", () => resolve());
+            targetConn.once("error", reject);
           }
         });
 
@@ -295,7 +318,10 @@ export class PolyMongoWrapper {
           const collName = collInfo.name;
           this.logManager.log(`Copying collection: ${collName}`);
 
-          const docs = await sourceConn.db.collection(collName).find({}).toArray();
+          const docs = await sourceConn.db
+            .collection(collName)
+            .find({})
+            .toArray();
 
           if (docs.length > 0) {
             await targetConn.db.collection(collName).insertMany(docs);
@@ -303,19 +329,19 @@ export class PolyMongoWrapper {
 
           const indexes = await sourceConn.db.collection(collName).indexes();
           for (const index of indexes) {
-            if (index.name !== '_id_') {
+            if (index.name !== "_id_") {
               const { name, ...indexSpec } = index;
-              await targetConn.db.collection(collName).createIndex(
-                indexSpec.key,
-                { name, ...indexSpec }
-              );
+              await targetConn.db
+                .collection(collName)
+                .createIndex(indexSpec.key, { name, ...indexSpec });
             }
           }
         }
 
         this.logManager.log(`Database copied from ${sourceDB} to ${targetDB}`);
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        const errorMsg =
+          error instanceof Error ? error.message : "Unknown error";
         this.logManager.log(`Error copying database: ${errorMsg}`);
         throw new Error(`Failed to copy database: ${errorMsg}`);
       }
@@ -333,7 +359,8 @@ export class PolyMongoWrapper {
         this.watchManager.closeDBstream(dbName);
         this.logManager.log(`Database ${dbName} dropped successfully`);
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        const errorMsg =
+          error instanceof Error ? error.message : "Unknown error";
         this.logManager.log(`Error dropping database ${dbName}: ${errorMsg}`);
         throw new Error(`Failed to drop database: ${errorMsg}`);
       }
@@ -350,8 +377,8 @@ export class PolyMongoWrapper {
           if (conn.readyState === 1) {
             resolve();
           } else {
-            conn.once('open', () => resolve());
-            conn.once('error', reject);
+            conn.once("open", () => resolve());
+            conn.once("error", reject);
           }
         });
 
@@ -375,14 +402,15 @@ export class PolyMongoWrapper {
 
           exportData.collections[collName] = {
             documents: docs,
-            indexes: indexes
+            indexes: indexes,
           };
         }
 
         this.logManager.log(`Database ${dbName} exported successfully`);
         return exportData;
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        const errorMsg =
+          error instanceof Error ? error.message : "Unknown error";
         this.logManager.log(`Error exporting database: ${errorMsg}`);
         throw new Error(`Failed to export database: ${errorMsg}`);
       }
@@ -392,7 +420,7 @@ export class PolyMongoWrapper {
       try {
         this.logManager.log(`Importing database to: ${dbName}`);
 
-        if (!data.collections || typeof data.collections !== 'object') {
+        if (!data.collections || typeof data.collections !== "object") {
           throw new Error("Invalid import data format");
         }
 
@@ -403,8 +431,8 @@ export class PolyMongoWrapper {
           if (conn.readyState === 1) {
             resolve();
           } else {
-            conn.once('open', () => resolve());
-            conn.once('error', reject);
+            conn.once("open", () => resolve());
+            conn.once("error", reject);
           }
         });
 
@@ -412,7 +440,9 @@ export class PolyMongoWrapper {
           throw new Error("Database connection not ready");
         }
 
-        for (const [collName, collData] of Object.entries(data.collections as any)) {
+        for (const [collName, collData] of Object.entries(
+          data.collections as any
+        )) {
           this.logManager.log(`Importing collection: ${collName}`);
 
           const { documents, indexes } = collData as any;
@@ -423,12 +453,11 @@ export class PolyMongoWrapper {
 
           if (indexes && Array.isArray(indexes)) {
             for (const index of indexes) {
-              if (index.name !== '_id_') {
+              if (index.name !== "_id_") {
                 const { name, ...indexSpec } = index;
-                await conn.db.collection(collName).createIndex(
-                  indexSpec.key,
-                  { name, ...indexSpec }
-                );
+                await conn.db
+                  .collection(collName)
+                  .createIndex(indexSpec.key, { name, ...indexSpec });
               }
             }
           }
@@ -436,17 +465,18 @@ export class PolyMongoWrapper {
 
         this.logManager.log(`Database imported to ${dbName} successfully`);
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        const errorMsg =
+          error instanceof Error ? error.message : "Unknown error";
         this.logManager.log(`Error importing database: ${errorMsg}`);
         throw new Error(`Failed to import database: ${errorMsg}`);
       }
     },
     exportStream: (dbName: string): NodeJS.ReadableStream => {
-      const { Readable } = require('stream');
+      const { Readable } = require("stream");
 
       const stream = new Readable({
         objectMode: false,
-        async read() { }
+        async read() {},
       });
 
       (async () => {
@@ -458,15 +488,21 @@ export class PolyMongoWrapper {
           await new Promise<void>((resolve, reject) => {
             if (conn.readyState === 1) resolve();
             else {
-              conn.once('open', () => resolve());
-              conn.once('error', reject);
+              conn.once("open", () => resolve());
+              conn.once("error", reject);
             }
           });
 
           if (!conn.db) throw new Error("Database connection not ready");
 
           // Start JSON structure
-          stream.push('{"database":"' + dbName + '","exportDate":"' + new Date().toISOString() + '","collections":{');
+          stream.push(
+            '{"database":"' +
+              dbName +
+              '","exportDate":"' +
+              new Date().toISOString() +
+              '","collections":{'
+          );
 
           const collections = await conn.db.listCollections().toArray();
 
@@ -474,7 +510,7 @@ export class PolyMongoWrapper {
             const collName = collections[i].name;
             this.logManager.log(`Streaming collection: ${collName}`);
 
-            if (i > 0) stream.push(',');
+            if (i > 0) stream.push(",");
             stream.push('"' + collName + '":{"documents":[');
 
             // Stream documents
@@ -482,7 +518,7 @@ export class PolyMongoWrapper {
             let first = true;
 
             for await (const doc of cursor) {
-              if (!first) stream.push(',');
+              if (!first) stream.push(",");
               stream.push(JSON.stringify(doc));
               first = false;
             }
@@ -490,15 +526,16 @@ export class PolyMongoWrapper {
             stream.push('],"indexes":');
             const indexes = await conn.db.collection(collName).indexes();
             stream.push(JSON.stringify(indexes));
-            stream.push('}');
+            stream.push("}");
           }
 
-          stream.push('}}');
+          stream.push("}}");
           stream.push(null);
 
           this.logManager.log(`Stream export completed for: ${dbName}`);
         } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : "Unknown error";
+          const errorMsg =
+            error instanceof Error ? error.message : "Unknown error";
           this.logManager.log(`Error in stream export: ${errorMsg}`);
           stream.destroy(new Error(`Export stream failed: ${errorMsg}`));
         }
@@ -507,7 +544,10 @@ export class PolyMongoWrapper {
       return stream;
     },
 
-    importStream: async (dbName: string, stream: NodeJS.ReadableStream): Promise<void> => {
+    importStream: async (
+      dbName: string,
+      stream: NodeJS.ReadableStream
+    ): Promise<void> => {
       return new Promise(async (resolve, reject) => {
         try {
           this.logManager.log(`Starting stream import to: ${dbName}`);
@@ -517,28 +557,30 @@ export class PolyMongoWrapper {
           await new Promise<void>((resolveConn, rejectConn) => {
             if (conn.readyState === 1) resolveConn();
             else {
-              conn.once('open', () => resolveConn());
-              conn.once('error', rejectConn);
+              conn.once("open", () => resolveConn());
+              conn.once("error", rejectConn);
             }
           });
 
           if (!conn.db) throw new Error("Database connection not ready");
 
-          let buffer = '';
+          let buffer = "";
 
-          stream.on('data', (chunk) => {
+          stream.on("data", (chunk) => {
             buffer += chunk.toString();
           });
 
-          stream.on('end', async () => {
+          stream.on("end", async () => {
             try {
               const data = JSON.parse(buffer);
 
-              if (!data.collections || typeof data.collections !== 'object') {
+              if (!data.collections || typeof data.collections !== "object") {
                 throw new Error("Invalid import data format");
               }
 
-              for (const [collName, collData] of Object.entries(data.collections as any)) {
+              for (const [collName, collData] of Object.entries(
+                data.collections as any
+              )) {
                 this.logManager.log(`Importing collection: ${collName}`);
 
                 const { documents, indexes } = collData as any;
@@ -554,12 +596,11 @@ export class PolyMongoWrapper {
 
                 if (indexes && Array.isArray(indexes)) {
                   for (const index of indexes) {
-                    if (index.name !== '_id_') {
+                    if (index.name !== "_id_") {
                       const { name, ...indexSpec } = index;
-                      await conn.db!.collection(collName).createIndex(
-                        indexSpec.key,
-                        { name, ...indexSpec }
-                      );
+                      await conn
+                        .db!.collection(collName)
+                        .createIndex(indexSpec.key, { name, ...indexSpec });
                     }
                   }
                 }
@@ -568,24 +609,27 @@ export class PolyMongoWrapper {
               this.logManager.log(`Stream import completed for: ${dbName}`);
               resolve();
             } catch (error) {
-              const errorMsg = error instanceof Error ? error.message : "Unknown error";
-              this.logManager.log(`Error processing import stream: ${errorMsg}`);
+              const errorMsg =
+                error instanceof Error ? error.message : "Unknown error";
+              this.logManager.log(
+                `Error processing import stream: ${errorMsg}`
+              );
               reject(new Error(`Import stream failed: ${errorMsg}`));
             }
           });
 
-          stream.on('error', (error) => {
+          stream.on("error", (error) => {
             this.logManager.log(`Stream error: ${error.message}`);
             reject(new Error(`Import stream failed: ${error.message}`));
           });
-
         } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : "Unknown error";
+          const errorMsg =
+            error instanceof Error ? error.message : "Unknown error";
           this.logManager.log(`Error in stream import: ${errorMsg}`);
           reject(new Error(`Failed to import stream: ${errorMsg}`));
         }
       });
-    }
+    },
   };
 
   public actions = {
@@ -595,7 +639,8 @@ export class PolyMongoWrapper {
         this.watchManager.closeAllWatches();
         await this.connectionManager.closeAll();
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        const errorMsg =
+          error instanceof Error ? error.message : "Unknown error";
         this.logManager.log(`Error in actions.closeAll: ${errorMsg}`);
         throw new Error(`Failed to close connections: ${errorMsg}`);
       }
@@ -607,7 +652,8 @@ export class PolyMongoWrapper {
         this.watchManager.closeAllWatches();
         await this.connectionManager.forceCloseAll();
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        const errorMsg =
+          error instanceof Error ? error.message : "Unknown error";
         this.logManager.log(`Error in actions.forceCloseAll: ${errorMsg}`);
         throw new Error(`Failed to force close connections: ${errorMsg}`);
       }
@@ -618,7 +664,8 @@ export class PolyMongoWrapper {
         this.logManager.log(`Actions closeDBstream called for ${dbName}`);
         this.watchManager.closeDBstream(dbName);
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        const errorMsg =
+          error instanceof Error ? error.message : "Unknown error";
         this.logManager.log(`Error closing DB stream: ${errorMsg}`);
         throw new Error(`Failed to close database stream: ${errorMsg}`);
       }
@@ -629,10 +676,11 @@ export class PolyMongoWrapper {
         this.logManager.log("Actions closeAllWatches called");
         this.watchManager.closeAllWatches();
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        const errorMsg =
+          error instanceof Error ? error.message : "Unknown error";
         this.logManager.log(`Error closing watches: ${errorMsg}`);
         throw new Error(`Failed to close watches: ${errorMsg}`);
       }
-    }
+    },
   };
 }
