@@ -269,7 +269,29 @@ export class PolyMongoWrapper {
     return this.connectionManager.getReadyState();
   }
 
-  
+  async transaction<T>(
+    fn: (session: mongoose.ClientSession) => Promise<T>,
+    options?: mongoose.mongo.TransactionOptions
+  ): Promise<T> {
+    this.logManager.log("Starting transaction");
+    const primary = this.initPrimary();
+    const session = await primary.startSession();
+
+    try {
+      session.startTransaction(options);
+      const result = await fn(session);
+      await session.commitTransaction();
+      this.logManager.log("Transaction committed successfully");
+      return result;
+    } catch (error) {
+      await session.abortTransaction();
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      this.logManager.log(`Transaction failed: ${errorMsg}`);
+      throw error;
+    } finally {
+      await session.endSession();
+    }
+  }
 
   public bulkTasks = {
     copyDatabase: async (sourceDB: string, targetDB: string): Promise<void> => {

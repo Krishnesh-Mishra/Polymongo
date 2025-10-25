@@ -36,6 +36,7 @@ await User.db("analytics").find(); // That's it.
 - 🔌 **Separate Clusters** - Connect different databases to different MongoDB instances
 - 📊 **Real-time Monitoring** - Track pool usage, connection states, and performance
 - 🪝 **Lifecycle Hooks** - Execute callbacks on connect/disconnect events
+- 🔒 **MultiDB Transaction Support** - Built-in session management with auto-rollback
 - 📡 **Watch Stream Management** - Automatic cleanup of change streams
 - 💾 **Bulk Operations** - Export/import entire databases with streaming
 - 🛡️ **Production Ready** - Graceful shutdown, error recovery, comprehensive logging
@@ -219,7 +220,21 @@ console.log(dbStats);
 const databases = await db.stats.listDatabases();
 ```
 
+### Transactions
 
+```typescript
+// Automatic session management with rollback on error
+await wrapper.transaction(async () => {
+  const firm = await Firm.db("admin").find({}, { session });
+  await User.tdb("UserDB").create(
+    {
+      username: "admin",
+      password: "admin@123",
+    },
+    { session }
+  );
+});
+```
 
 ---
 
