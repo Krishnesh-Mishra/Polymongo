@@ -226,7 +226,7 @@ const databases = await db.stats.listDatabases();
 // Automatic session management with rollback on error
 await wrapper.transaction(async () => {
   const firm = await Firm.db("admin").find({}, { session });
-  await User.tdb("UserDB").create(
+  await User.db("UserDB").create(
     {
       username: "admin",
       password: "admin@123",
