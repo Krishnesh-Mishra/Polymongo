@@ -393,7 +393,7 @@ await Model.db("db2").find();
 | Operation       | Native Mongoose | PolyMongo      | Difference      |
 | --------------- | --------------- | -------------- | --------------- |
 | Single DB Query | 12ms            | 12ms           | No overhead     |
-| Multi DB Switch | 45ms (new conn) | 0.1ms (cached) | **450x faster** |
+| Multi DB Switch | 45ms (new conn) | 5-10ms (cached) | **upto 5x faster** |
 | Connection Pool | Manual          | Automatic      | **Zero config** |
 | Memory (10 DBs) | ~50MB           | ~15MB          | **70% less**    |
 
