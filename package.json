@@ -1,6 +1,6 @@
 {
   "name": "polymongo",
-  "version": "1.2.05.2",
+  "version": "1.2.06",
   "description": "Adaptive Multi-Database Wrapper for Mongoose with automatic connection management",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -1,2 +1,3 @@
-import { PolyMongo } from "./core/PolyMongo";
+// src/index.ts
+import { PolyMongo } from "./public/polymongo";
 export = PolyMongo;
