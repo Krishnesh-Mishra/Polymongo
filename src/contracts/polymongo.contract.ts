@@ -31,7 +31,7 @@ export interface PoolStats {
  * Wrapped model interface with db method.
  */
 // In your types file
-export type WrappedModel<T extends mongoose.Document> = {
+export type WrappedModel<T> = {
   db: (dbName?: string) => mongoose.Model<T>;
 } & mongoose.Model<T>;
 /**

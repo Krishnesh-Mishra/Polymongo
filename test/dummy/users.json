@@ -1,0 +1,12 @@
+[
+  { "name": "Jane Doe", "email": "jane@example.com", "role": "admin" },
+  { "name": "John Smith", "email": "john@example.com", "role": "user" },
+  { "name": "Alice Wilson", "email": "alice@example.com", "role": "editor" },
+  { "name": "Bob Martinez", "email": "bob@example.com", "role": "user" },
+  { "name": "Carol Davis", "email": "carol@example.com", "role": "admin" },
+  { "name": "Dave Lee", "email": "dave@example.com", "role": "moderator" },
+  { "name": "Eve Chen", "email": "eve@example.com", "role": "user" },
+  { "name": "Frank Brown", "email": "frank@example.com", "role": "editor" },
+  { "name": "Grace Kim", "email": "grace@example.com", "role": "user" },
+  { "name": "Henry Taylor", "email": "henry@example.com", "role": "viewer" }
+]

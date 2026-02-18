@@ -1,0 +1,12 @@
+[
+  { "orderId": "ORD-001", "amount": 250.50, "status": "pending" },
+  { "orderId": "ORD-002", "amount": 99.99, "status": "shipped" },
+  { "orderId": "ORD-003", "amount": 1250.00, "status": "delivered" },
+  { "orderId": "ORD-004", "amount": 45.00, "status": "cancelled" },
+  { "orderId": "ORD-005", "amount": 899.95, "status": "pending" },
+  { "orderId": "ORD-006", "amount": 320.00, "status": "processing" },
+  { "orderId": "ORD-007", "amount": 15.50, "status": "shipped" },
+  { "orderId": "ORD-008", "amount": 2100.00, "status": "delivered" },
+  { "orderId": "ORD-009", "amount": 175.25, "status": "refunded" },
+  { "orderId": "ORD-010", "amount": 560.00, "status": "pending" }
+]

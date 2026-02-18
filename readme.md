@@ -50,7 +50,7 @@ npm install polymongo
 ## 🚀 Quick Start (60 seconds)
 
 ```typescript
-import { PolyMongo } from "polymongo";
+import PolyMongo  from "polymongo";
 import mongoose from "mongoose";
 
 // 1. Define your schema

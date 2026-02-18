@@ -150,7 +150,7 @@ export class PolyMongoWrapper {
     this.hookManager.onTheseDBDisconnect(dbNames, callback);
   }
 
-  wrapModel<T extends mongoose.Document>(
+  wrapModel<T>(
     baseModel: mongoose.Model<T>
   ): WrappedModel<T> {
     const wrapper = this;

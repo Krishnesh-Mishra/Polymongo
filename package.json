@@ -7,6 +7,7 @@
   "scripts": {
     "build": "rimraf dist && tsc",
     "prepublishOnly": "npm run build",
+    "test": "node test/index.js",
     "exServer": "nodemon examples/server.js",
     "format": "prettier --write src/**/*.ts"
   },
@@ -45,6 +46,7 @@
     "rimraf": "^5.0.10",
     "ts-jest": "^29.1.1",
     "ts-node": "^10.9.2",
+    "tsup": "^8.5.1",
     "typescript": "^5.9.3"
   },
   "engines": {

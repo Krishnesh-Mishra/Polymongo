@@ -1,0 +1,10 @@
+[
+  { "sku": "PROD-001", "name": "Wireless Mouse", "price": 29.99, "category": "electronics", "stock": 150 },
+  { "sku": "PROD-002", "name": "Mechanical Keyboard", "price": 89.99, "category": "electronics", "stock": 75 },
+  { "sku": "PROD-003", "name": "USB-C Hub", "price": 45.00, "category": "electronics", "stock": 200 },
+  { "sku": "PROD-004", "name": "Laptop Stand", "price": 35.50, "category": "accessories", "stock": 120 },
+  { "sku": "PROD-005", "name": "Webcam HD", "price": 65.00, "category": "electronics", "stock": 90 },
+  { "sku": "PROD-006", "name": "Desk Lamp", "price": 42.00, "category": "office", "stock": 60 },
+  { "sku": "PROD-007", "name": "Monitor Arm", "price": 119.99, "category": "accessories", "stock": 45 },
+  { "sku": "PROD-008", "name": "Noise-Cancel Headphones", "price": 199.99, "category": "electronics", "stock": 30 }
+]
