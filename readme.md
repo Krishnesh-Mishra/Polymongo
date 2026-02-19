@@ -235,7 +235,6 @@ await wrapper.transaction(async () => {
   );
 });
 ```
-NOTE: Transactions only work if both the databases are in the same cluster (Means they share same URL not if dbSpecific have diffrent url).
 
 ---
 

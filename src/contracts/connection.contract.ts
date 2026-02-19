@@ -1,14 +1,24 @@
 // src/contracts/connection.contract.ts
 import * as mongoose from "mongoose";
 
+/**
+ * Specific configuration for a single database.
+ */
 export interface DBSpecificConfig {
+  /** Database name */
   dbName: string;
-  mongoURI?: string; // Optional separate URI for this DB
+  /** Optional separate MongoDB URI for this specific database */
+  mongoURI?: string;
+  /** Connection and lifecycle options for this database */
   options: {
+    /** If true, closes connection after TTL expires (default: false) */
     autoClose?: boolean;
-    ttl?: number; // milliseconds
+    /** Time in milliseconds to keep connection alive after last access */
+    ttl?: number;
+    /** Maximum connections for this specific database pool */
     maxConnections?: number;
-    coldStart?: boolean; // Per-DB cold start option
+    /** If true, connection occurs only on first access (default: true) */
+    coldStart?: boolean;
   };
 }
 
@@ -55,9 +65,16 @@ export interface PrimaryInfo {
   sharedDatabases: string[];
 }
 
+/**
+ * Aggregated connection statistics across the entire wrapper.
+ */
 export interface ConnectionStats {
+  /** Number of active connection pools */
   totalActivePools: number;
+  /** Total number of open connections across all pools */
   totalConnectionsAcrossPools: number;
+  /** Statistics for the primary connection shared among databases */
   primary: PrimaryInfo | null;
+  /** Statistics for databases with separate connection pools */
   separateDB: SeparateConnectionInfo[];
 }

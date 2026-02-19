@@ -9,6 +9,11 @@ export class ScaleService {
     private logManager: LogManager
   ) {}
 
+  /**
+   * Explicitly connects to one or more databases.
+   * @param dbNames - Array of database names to initialize
+   * @param options - Optional scaling configuration
+   */
   async connectDB(dbNames: string[], options?: ScaleOptions): Promise<void> {
     try {
       this.logManager.log(`Scale.connectDB called for: ${dbNames.join(', ')}`);
@@ -20,6 +25,11 @@ export class ScaleService {
     }
   }
 
+  /**
+   * Pre-configures settings for specific databases before they are accessed.
+   * @param dbNames - Array of database names to configure
+   * @param options - Configuration options (TTL, max connections, etc.)
+   */
   setDB(dbNames: string[], options?: ScaleOptions & { mongoURI?: string }): void {
     try {
       this.logManager.log(`Scale.setDB called for: ${dbNames.join(', ')}`);

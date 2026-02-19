@@ -15,6 +15,10 @@ export class StatsService {
     private defaultDB: string
   ) { }
 
+  /**
+   * Retrieves general connection statistics across all pools.
+   * @returns Comprehensive connection and pool statistics
+   */
   general(): ConnectionStats {
     try {
       const primary = this.connectionManager.primary;
@@ -57,6 +61,11 @@ export class StatsService {
     }
   }
 
+  /**
+   * Retrieves detailed statistics for a specific database.
+   * @param dbName - Optional database name (defaults to defaultDB)
+   * @returns Database statistics including size and collections
+   */
   async db(dbName?: string): Promise<DbStats> {
     try {
       return await getDbStats(this.connectionManager, this.logManager, dbName ?? this.defaultDB);
@@ -67,6 +76,10 @@ export class StatsService {
     }
   }
 
+  /**
+   * Lists all available databases in the MongoDB cluster with their sizes.
+   * @returns Array of database names and sizes in MB
+   */
   async listDatabases(): Promise<Array<{ dbName: string; sizeInMB: number }>> {
     try {
       this.logManager.log("Listing all databases");

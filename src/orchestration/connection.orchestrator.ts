@@ -10,6 +10,10 @@ import { StatsService } from "../observability/metrics.collector";
 import { ScaleService } from "./scaling.orchestrator";
 import { DBSpecificConfig } from "../contracts/connection.contract";
 
+/**
+ * Core orchestration class for PolyMongo.
+ * Manages connection pooling, multi-database switching, and lifecycle hooks.
+ */
 export class PolyMongoWrapper {
   private mongoURI: string;
   private defaultDB: string;
@@ -128,14 +132,27 @@ export class PolyMongoWrapper {
     return dbConn;
   }
 
+  /**
+   * Registers a callback for when any database connection is established.
+   * @param callback - Function to execute on connection
+   */
   public onDbConnect(callback: (db: mongoose.Connection) => void): void {
     this.hookManager.onDbConnect(callback);
   }
 
+  /**
+   * Registers a callback for when any database connection is closed.
+   * @param callback - Function to execute on disconnection
+   */
   public onDbDisconnect(callback: (db: mongoose.Connection) => void): void {
     this.hookManager.onDbDisconnect(callback);
   }
 
+  /**
+   * Registers a callback for when specific databases connect.
+   * @param dbNames - List of database names to watch
+   * @param callback - Function to execute on connection
+   */
   public onTheseDBConnect(
     dbNames: string[],
     callback: (db: mongoose.Connection) => void
@@ -150,6 +167,11 @@ export class PolyMongoWrapper {
     this.hookManager.onTheseDBDisconnect(dbNames, callback);
   }
 
+  /**
+   * Wraps a Mongoose model to enable dynamic database switching.
+   * @param baseModel - The standard Mongoose model to wrap
+   * @returns A wrapped model with `.db()` capability
+   */
   wrapModel<T>(
     baseModel: mongoose.Model<T>
   ): WrappedModel<T> {
@@ -262,14 +284,29 @@ export class PolyMongoWrapper {
     };
   }
 
+  /**
+   * Checks if the primary connection is currently established.
+   * @returns True if connected, false otherwise
+   */
   isConnected(): boolean {
     return this.connectionManager.isConnected();
   }
 
+  /**
+   * Gets the current state of the primary connection.
+   * @returns Connection state ('connected', 'disconnected', etc.)
+   */
   getConnectionState(): string {
     return this.connectionManager.getReadyState();
   }
 
+  /**
+   * Executes a function within a database transaction.
+   * Automatically handles sessions and rollbacks on error.
+   * @param fn - The function to execute within the transaction
+   * @param options - Optional Mongoose transaction options
+   * @returns The result of the executed function
+   */
   async transaction<T>(
     fn: (session: mongoose.ClientSession) => Promise<T>,
     options?: mongoose.mongo.TransactionOptions
@@ -325,7 +362,15 @@ export class PolyMongoWrapper {
     }
   }
 
+  /**
+   * Utility tasks for database maintenance and bulk data movement.
+   */
   public bulkTasks = {
+    /**
+     * Copies all collections and indexes from one database to another.
+     * @param sourceDB - Name of the source database
+     * @param targetDB - Name of the target database
+     */
     copyDatabase: async (sourceDB: string, targetDB: string): Promise<void> => {
       try {
         this.logManager.log(`Copying database from ${sourceDB} to ${targetDB}`);
@@ -386,6 +431,10 @@ export class PolyMongoWrapper {
       }
     },
 
+    /**
+     * Drops an entire database and cleans up associated resources.
+     * @param dbName - Name of the database to drop
+     */
     dropDatabase: async (dbName: string): Promise<void> => {
       try {
         if (!dbName) {
@@ -405,6 +454,11 @@ export class PolyMongoWrapper {
       }
     },
 
+    /**
+     * Exports an entire database's data and indexes to a JSON object.
+     * @param dbName - Name of the database to export
+     * @returns Object containing all database data
+     */
     export: async (dbName: string): Promise<any> => {
       try {
         this.logManager.log(`Exporting database: ${dbName}`);
@@ -453,6 +507,11 @@ export class PolyMongoWrapper {
       }
     },
 
+    /**
+     * Imports data and indexes into a specified database.
+     * @param dbName - Name of the target database
+     * @param data - The data object to import (from export)
+     */
     import: async (dbName: string, data: any): Promise<void> => {
       try {
         this.logManager.log(`Importing database to: ${dbName}`);
@@ -507,6 +566,12 @@ export class PolyMongoWrapper {
       }
     },
 
+    /**
+     * Creates a readable stream of the entire database in JSON format.
+     * Ideal for large databases to avoid memory issues.
+     * @param dbName - Name of the database to export
+     * @returns A readable stream of database data
+     */
     exportStream: (dbName: string): NodeJS.ReadableStream => {
       const { Readable } = require("stream");
 
@@ -666,7 +731,13 @@ export class PolyMongoWrapper {
     },
   };
 
+  /**
+   * Lifecycle management actions for connections and streams.
+   */
   public actions = {
+    /**
+     * Closes all active connections and watch streams gracefully.
+     */
     closeAll: async (): Promise<void> => {
       try {
         this.logManager.log("Actions closeAll called");
