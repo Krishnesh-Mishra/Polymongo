@@ -1,0 +1,6 @@
+logging system :
+ const WrappedUser = db.wrapModel(User, {
+  logs: {
+    name: "user_history_logs"
+  }
+});
