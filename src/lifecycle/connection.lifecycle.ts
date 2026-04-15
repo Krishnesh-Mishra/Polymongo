@@ -1,28 +1,52 @@
 // src/lifecycle/connection.lifecycle.ts
-import * as mongoose from "mongoose";
+import mongoose from "mongoose";
 import { LogManager } from "../infrastructure/logger.adapter";
 import { DBSpecificConfig, ConnectionPoolInfo, ScaleOptions } from "../contracts/connection.contract";
 import { cleanMongoURI, getPoolStats } from "../infrastructure/mongo.adapter";
 import { CONNECTION_CONSTANTS } from "../policy/retry.policy";
 import { HookManager } from "./client.lifecycle";
+import { ConnectionRecoveryService } from "./connection.recovery";
 
 export class ConnectionManager {
   primary: mongoose.Connection | null = null;
   connections: Map<string, mongoose.Connection> = new Map();
   private isShuttingDown: boolean = false;
-  private reconnectAttempts: number = 0;
+  private retryIntervalMS?: number;
+  private recoveryService: ConnectionRecoveryService;
   public dbConfigs: Map<string, DBSpecificConfig['options'] & { mongoURI?: string }> = new Map();
   public separateConnections: Map<string, ConnectionPoolInfo> = new Map();
 
   constructor(
     public mongoURI: string,
+    private defaultDBName: string,
     private maxPoolSize: number,
     private minFreeConnections: number,
     private idleTimeoutMS: number | undefined,
+    retryIntervalMS: number | undefined,
     private logManager: LogManager,
     dbSpecificConfigs?: DBSpecificConfig[],
-    private hooks?: HookManager['hooks']
+    private hookManager?: HookManager
   ) {
+    this.retryIntervalMS = retryIntervalMS;
+    this.recoveryService = new ConnectionRecoveryService(
+      {
+        mongoURI: this.mongoURI,
+        defaultDBName: this.defaultDBName,
+        maxPoolSize: this.maxPoolSize,
+        minFreeConnections: this.minFreeConnections,
+        idleTimeoutMS: this.idleTimeoutMS,
+        retryIntervalMS: this.retryIntervalMS,
+        isShuttingDown: () => this.isShuttingDown,
+        getPrimary: () => this.primary,
+        setPrimary: (connection) => {
+          this.primary = connection;
+        },
+        getSeparateConnections: () => this.separateConnections,
+      },
+      this.logManager,
+      this.hookManager
+    );
+
     if (dbSpecificConfigs) {
       dbSpecificConfigs.forEach(config => {
         const cleanURI = config.mongoURI ? cleanMongoURI(config.mongoURI, this.logManager) : undefined;
@@ -113,7 +137,7 @@ export class ConnectionManager {
           connectTimeoutMS: CONNECTION_CONSTANTS.CONNECT_TIMEOUT,
         });
 
-        this.setupConnectionHandlers(connection);
+        this.recoveryService.bind(connection);
 
         const poolInfo: ConnectionPoolInfo = {
           dbName,
@@ -199,6 +223,7 @@ export class ConnectionManager {
 
       try {
         this.primary = mongoose.createConnection(this.mongoURI, {
+          dbName: this.defaultDBName,
           maxPoolSize: this.maxPoolSize + 1,
           minPoolSize: this.minFreeConnections,
           maxIdleTimeMS: this.idleTimeoutMS,
@@ -211,7 +236,7 @@ export class ConnectionManager {
           `Primary connection options: maxPoolSize=${this.maxPoolSize + 1}, minPoolSize=${this.minFreeConnections}, maxIdleTimeMS=${this.idleTimeoutMS}`
         );
 
-        this.setupConnectionHandlers(this.primary);
+        this.recoveryService.bind(this.primary);
         this.logManager.log("Primary connection initialized");
       } catch (error) {
         const errorMsg =
@@ -225,121 +250,6 @@ export class ConnectionManager {
       }
     }
     return this.primary;
-  }
-
-  private setupConnectionHandlers(connection: mongoose.Connection): void {
-    connection.on("connected", () => {
-      this.reconnectAttempts = 0;
-      this.logManager.log("MongoDB connected successfully");
-      this.hooks?.onDbConnect.forEach(callback => callback(connection));
-      const dbName = connection.name;
-      this.hooks?.onTheseDBConnect.get(dbName)?.forEach(callback => callback(connection));
-    });
-
-    connection.on("error", (err) => {
-      const errorMsg = err instanceof Error ? err.message : "Unknown error";
-      console.error(`MongoDB connection error: ${errorMsg}`);
-      this.logManager.log(`Connection error: ${errorMsg}`);
-
-      if (!this.isShuttingDown) {
-        this.handleConnectionError(err, connection);
-      }
-    });
-
-    connection.on("disconnected", () => {
-      this.logManager.log("MongoDB disconnected");
-      const dbName = connection.name;
-      this.hooks?.onTheseDBDisconnect.get(dbName)?.forEach(callback => callback(connection));
-      if (!this.isShuttingDown && this.reconnectAttempts < CONNECTION_CONSTANTS.MAX_RECONNECT_ATTEMPTS) {
-        this.handleConnectionError(new Error("Connection disconnected"), connection);
-      }
-    });
-    connection.on("reconnected", () => {
-      this.reconnectAttempts = 0;
-      this.logManager.log("MongoDB reconnected successfully");
-    });
-
-    connection.on("close", () => {
-      this.logManager.log("MongoDB connection closed");
-    });
-  }
-
-  private handleConnectionError(error: Error, connection?: mongoose.Connection, poolInfo?: ConnectionPoolInfo): void {
-    this.logManager.log(`Handling connection error: ${error.message}`);
-
-    if (error.message.includes("authentication failed") || error.message.includes("not authorized")) {
-      this.logManager.log("Authentication error - stopping reconnection attempts");
-      return;
-    }
-
-    if (connection && !poolInfo) {
-      for (const [_, pInfo] of this.separateConnections.entries()) {
-        if (pInfo.connection === connection) {
-          poolInfo = pInfo;
-          break;
-        }
-      }
-    }
-
-    if (this.reconnectAttempts < CONNECTION_CONSTANTS.MAX_RECONNECT_ATTEMPTS) {
-      this.attemptReconnect(poolInfo);
-    } else {
-      this.logManager.log("Max reconnection attempts reached");
-    }
-  }
-
-  private attemptReconnect(poolInfo?: ConnectionPoolInfo): void {
-    this.reconnectAttempts++;
-    if (this.reconnectAttempts > CONNECTION_CONSTANTS.MAX_RECONNECT_ATTEMPTS) {
-      this.logManager.log("Max reconnection attempts reached");
-      return;
-    }
-    const delay = CONNECTION_CONSTANTS.RECONNECT_INTERVAL * this.reconnectAttempts;
-    this.logManager.log(`Attempting reconnection ${this.reconnectAttempts}/${CONNECTION_CONSTANTS.MAX_RECONNECT_ATTEMPTS} in ${delay}ms`);
-    setTimeout(() => {
-      if (this.isShuttingDown) return;
-      this.logManager.log("Reconnecting to MongoDB...");
-      if (poolInfo) {
-        if (poolInfo.connection.readyState === 0) {
-          try {
-            poolInfo.connection = mongoose.createConnection(poolInfo.mongoURI || this.mongoURI, {
-              dbName: poolInfo.dbName,
-              maxPoolSize: poolInfo.config.maxConnections || this.maxPoolSize,
-              minPoolSize: this.minFreeConnections,
-              maxIdleTimeMS: this.idleTimeoutMS,
-              serverSelectionTimeoutMS: CONNECTION_CONSTANTS.SERVER_SELECTION_TIMEOUT,
-              socketTimeoutMS: CONNECTION_CONSTANTS.SOCKET_TIMEOUT,
-              connectTimeoutMS: CONNECTION_CONSTANTS.CONNECT_TIMEOUT,
-              bufferCommands: false,
-            });
-            this.setupConnectionHandlers(poolInfo.connection);
-            this.logManager.log(`Separate connection for ${poolInfo.dbName} recreated`);
-          } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : "Unknown error";
-            this.logManager.log(`Separate reconnect failed for ${poolInfo.dbName}: ${errorMsg}`);
-            this.attemptReconnect(poolInfo);
-          }
-        }
-      } else if (!this.primary || this.primary.readyState === 0) {
-        try {
-          this.primary = mongoose.createConnection(this.mongoURI, {
-            maxPoolSize: this.maxPoolSize + 1,
-            minPoolSize: this.minFreeConnections,
-            maxIdleTimeMS: this.idleTimeoutMS,
-            serverSelectionTimeoutMS: CONNECTION_CONSTANTS.SERVER_SELECTION_TIMEOUT,
-            socketTimeoutMS: CONNECTION_CONSTANTS.SOCKET_TIMEOUT,
-            connectTimeoutMS: CONNECTION_CONSTANTS.CONNECT_TIMEOUT,
-            bufferCommands: false,
-          });
-          this.setupConnectionHandlers(this.primary);
-          this.logManager.log("Primary connection recreated");
-        } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : "Unknown error";
-          this.logManager.log(`Reconnect failed: ${errorMsg}`);
-          this.attemptReconnect();
-        }
-      }
-    }, delay);
   }
 
   getConnection(dbName: string = "default"): mongoose.Connection {
@@ -405,16 +315,35 @@ export class ConnectionManager {
 
   async closeAll(): Promise<void> {
     this.logManager.log("Closing all non-essential connections");
-    if (this.primary && this.primary.readyState === 1) {
-      try {
-        await this.primary.close(false);
-        this.logManager.log("All connections closed gracefully");
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error closing connections: ${errorMsg}`);
-        throw error;
+    this.isShuttingDown = true;
+
+    try {
+      for (const [dbName, poolInfo] of this.separateConnections.entries()) {
+        if (poolInfo.timer) {
+          clearTimeout(poolInfo.timer);
+        }
+
+        await poolInfo.connection.close(false);
+        this.logManager.log(`Separate connection ${dbName} closed gracefully`);
       }
+
+      this.separateConnections.clear();
+
+      if (this.primary) {
+        await this.primary.close(false);
+        this.primary = null;
+      }
+
+      this.connections.clear();
+      this.lastAccessedDbs.clear();
+      this.logManager.log("All connections closed gracefully");
+    } catch (error) {
+      const errorMsg =
+        error instanceof Error ? error.message : "Unknown error";
+      this.logManager.log(`Error closing connections: ${errorMsg}`);
+      throw error;
+    } finally {
+      this.isShuttingDown = false;
     }
   }
 

@@ -44,8 +44,8 @@ async function run() {
             assertEqual(state, "connected", "State should be 'connected'");
         },
 
-        "scale.setDB() configures a database without connecting": async () => {
-            wrapper.scale.setDB(["test_pool_scaled"], {
+        "pool.configure() configures a database without connecting": async () => {
+            wrapper.pool.configure(["test_pool_scaled"], {
                 maxConnections: 5,
                 autoClose: true,
                 ttl: 3000,
@@ -55,12 +55,21 @@ async function run() {
             assert(true, "setDB should not throw");
         },
 
-        "scale.connectDB() creates separate pool for database": async () => {
-            await wrapper.scale.connectDB(["test_pool_separate"], {
+        "pool.connect() creates separate pool for database": async () => {
+            await wrapper.pool.connect(["test_pool_separate"], {
                 maxConnections: 3,
             });
             logInfo("Separate connection created for test_pool_separate");
             assert(true, "connectDB should not throw");
+        },
+
+        "scale alias remains compatible with pool API": async () => {
+            wrapper.scale.setDB(["test_pool_scale_alias"], {
+                maxConnections: 2,
+                coldStart: true,
+            });
+            await wrapper.scale.connectDB(["test_pool_scale_alias"]);
+            assert(true, "Legacy scale alias should remain usable");
         },
 
         "stats.general() reflects separate pool": async () => {
@@ -74,7 +83,7 @@ async function run() {
         "auto-close timer removes idle connection after TTL": async () => {
             // Create a wrapper with a very short TTL
             const ttlWrapper = createWrapper({ debug: false });
-            ttlWrapper.scale.setDB(["test_ttl_db"], {
+            ttlWrapper.pool.configure(["test_ttl_db"], {
                 autoClose: true,
                 ttl: 2000,    // 2 seconds
                 coldStart: false,

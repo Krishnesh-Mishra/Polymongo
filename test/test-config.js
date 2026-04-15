@@ -4,29 +4,29 @@
 const PolyMongo = require("../dist/index");
 
 // ─── MongoDB Config ─────────────────────────────────────────────────────────
-const mongoURI = process.env.MONGO_URI || "mongodb://admin:admin@localhost:27017/?replicaSet=rs0&authSource=admin";
+const mongoURI = process.env.MONGO_URI || "mongodb://localhost:27017";
 
 const databases = {
-    default: "test_inventory",
-    analytics: "test_analytics",
-    archive: "test_archive",
-    staging: "test_staging",
-    temp: "test_temp",
-    bulkSource: "test_bulk_source",
-    bulkTarget: "test_bulk_target",
-    copySource: "test_copy_source",
-    copyTarget: "test_copy_target",
-    streamSource: "test_stream_source",
-    streamTarget: "test_stream_target",
-    isolation_a: "test_isolation_a",
-    isolation_b: "test_isolation_b",
+    default: "polymongo_test_inventory",
+    analytics: "polymongo_test_analytics",
+    archive: "polymongo_test_archive",
+    staging: "polymongo_test_staging",
+    temp: "polymongo_test_temp",
+    bulkSource: "polymongo_test_bulk_source",
+    bulkTarget: "polymongo_test_bulk_target",
+    copySource: "polymongo_test_copy_source",
+    copyTarget: "polymongo_test_copy_target",
+    streamSource: "polymongo_test_stream_source",
+    streamTarget: "polymongo_test_stream_target",
+    isolation_a: "polymongo_test_isolation_a",
+    isolation_b: "polymongo_test_isolation_b",
 };
 
 const poolConfig = {
     maxPoolSize: 20,
     minFreeConnections: 2,
     idleTimeoutMS: 5000, // 5 seconds for fast testing of TTL
-    debug: false         // disable console noise during tests
+    debug: { log: false } // disable PolyMongo logging during tests
 };
 
 // ─── Color Helpers ──────────────────────────────────────────────────────────

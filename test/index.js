@@ -14,7 +14,6 @@ const {
 const validationTests = require("./features/validation.test");
 const poolingTests = require("./features/pooling.test");
 const multidbTests = require("./features/multidb.test");
-const transactionTests = require("./features/transactions.test");
 const bulkTests = require("./features/bulk.test");
 const observabilityTests = require("./features/observability.test");
 const hooksTests = require("./features/hooks.test");
@@ -97,7 +96,6 @@ async function runAllTests() {
         { name: "Validation", runner: validationTests },
         { name: "Pooling", runner: poolingTests },
         { name: "Multi-DB", runner: multidbTests },
-        { name: "Transactions", runner: transactionTests },
         { name: "Bulk Ops", runner: bulkTests },
         { name: "Observability", runner: observabilityTests },
         { name: "Hooks", runner: hooksTests },

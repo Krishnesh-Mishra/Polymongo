@@ -1,26 +1,39 @@
-// src/orchestration/connection.orchestrator.ts
-import * as mongoose from "mongoose";
-import { PolyMongoOptions, WrappedModel } from "../contracts/polymongo.contract";
-import { ConnectionManager } from "../lifecycle/connection.lifecycle";
-import { HookManager } from "../lifecycle/client.lifecycle";
-import { LogManager } from "../infrastructure/logger.adapter";
-import { WatchManager } from "../lifecycle/watch.lifecycle";
-import { validateOptions } from "../internal/guards.internal";
-import { StatsService } from "../observability/metrics.collector";
-import { ScaleService } from "./scaling.orchestrator";
+import mongoose from "mongoose";
+import {
+  DatabaseCopySummary,
+  DatabaseImportSummary,
+  PolyMongoActionsApi,
+  PolyMongoAdvancedAccess,
+  PolyMongoConnectResult,
+  PolyMongoDisconnectResult,
+  PolyMongoEventMap,
+  PolyMongoEventName,
+  PolyMongoOptions,
+  PolyMongoPoolApi,
+  PolyMongoScaleApi,
+  PolyMongoStatsApi,
+  PingResult,
+  WrappedModel,
+} from "../contracts/polymongo.contract";
 import { DBSpecificConfig } from "../contracts/connection.contract";
+import { LogManager, resolveLogOptions } from "../infrastructure/logger.adapter";
+import { validateOptions } from "../internal/guards.internal";
+import { HookManager } from "../lifecycle/client.lifecycle";
+import { ConnectionManager } from "../lifecycle/connection.lifecycle";
+import { WatchManager } from "../lifecycle/watch.lifecycle";
+import { StatsService } from "../observability/metrics.collector";
+import { getConnectionPoolSnapshot, waitForConnectionReady } from "./connection.utils";
+import { DatabaseActionsService } from "./database-actions.service";
+import { ModelWrapperService } from "./model-wrapper.service";
+import { ScaleService } from "./scaling.orchestrator";
+import { SharedConnectionService } from "./shared-connection.service";
 
-/**
- * Core orchestration class for PolyMongo.
- * Manages connection pooling, multi-database switching, and lifecycle hooks.
- */
 export class PolyMongoWrapper {
   private mongoURI: string;
   private defaultDB: string;
   private maxPoolSize: number;
   private minFreeConnections: number;
   private idleTimeoutMS: number | undefined;
-  private debug: boolean;
   private connectionManager: ConnectionManager;
   private hookManager: HookManager;
   private logManager: LogManager;
@@ -28,53 +41,77 @@ export class PolyMongoWrapper {
   private dbSpecificConfigs?: DBSpecificConfig[];
   private statsService: StatsService;
   private scaleService: ScaleService;
-  private primaryConn?: mongoose.Connection;
-  private dbCache = new Map<string, mongoose.Connection>(); // Cache per-DB connections from primary
+  private sharedConnections: SharedConnectionService;
+  private modelWrapperService: ModelWrapperService;
+  private databaseActions: DatabaseActionsService;
 
-  public stats: {
-    general: () => any;
-    db: (dbName?: string) => Promise<any>;
-    listDatabases: (dbName?: string) => Promise<any>;
+  public stats: PolyMongoStatsApi;
+  public pool: PolyMongoPoolApi;
+  public scale: PolyMongoScaleApi;
+  public actions: PolyMongoActionsApi;
+  public bulkTasks: {
+    copyDatabase: (sourceDB: string, targetDB: string) => Promise<DatabaseCopySummary>;
+    dropDatabase: (dbName: string) => Promise<void>;
+    export: (dbName: string) => Promise<any>;
+    import: (dbName: string, data: any) => Promise<DatabaseImportSummary>;
+    exportStream: (dbName: string) => NodeJS.ReadableStream;
+    importStream: (
+      dbName: string,
+      stream: NodeJS.ReadableStream,
+      options?: { batchSize?: number; stopOnError?: boolean }
+    ) => Promise<DatabaseImportSummary>;
   };
-  public scale: {
-    connectDB: (dbNames: string[], options?: any) => Promise<void>;
-    setDB: (dbNames: string[], options?: any) => void;
-  };
+  public adv: PolyMongoAdvancedAccess;
 
   constructor(options: PolyMongoOptions) {
     try {
       validateOptions(options);
+
       this.hookManager = new HookManager();
       this.mongoURI = options.mongoURI;
       this.defaultDB = options.defaultDB ?? "default";
       this.maxPoolSize = options.maxPoolSize ?? 10;
       this.minFreeConnections = options.minFreeConnections ?? 0;
       this.idleTimeoutMS = options.idleTimeoutMS ?? undefined;
-      this.debug = options.debug ?? false;
-
-      this.logManager = new LogManager(this.debug, options.logPath);
       this.dbSpecificConfigs = options.dbSpecific;
+      this.logManager = new LogManager(resolveLogOptions(options));
 
-      // Keep ConnectionManager for legacy/stats, but override model access below
       this.connectionManager = new ConnectionManager(
         this.mongoURI,
+        this.defaultDB,
         this.maxPoolSize,
         this.minFreeConnections,
         this.idleTimeoutMS,
+        options.retry,
         this.logManager,
         this.dbSpecificConfigs,
-        this.hookManager.hooks
+        this.hookManager
       );
 
       this.watchManager = new WatchManager(this.logManager);
+      this.sharedConnections = new SharedConnectionService(
+        this.connectionManager,
+        this.hookManager,
+        this.logManager
+      );
+      this.modelWrapperService = new ModelWrapperService(
+        this.defaultDB,
+        this.sharedConnections,
+        this.watchManager,
+        this.logManager
+      );
       this.statsService = new StatsService(
         this.connectionManager,
         this.logManager,
         this.getPoolStats.bind(this),
         this.defaultDB
       );
-      this.scaleService = new ScaleService(
+      this.scaleService = new ScaleService(this.connectionManager, this.logManager);
+      this.databaseActions = new DatabaseActionsService(
+        this.defaultDB,
         this.connectionManager,
+        this.sharedConnections,
+        this.watchManager,
         this.logManager
       );
 
@@ -84,24 +121,51 @@ export class PolyMongoWrapper {
         listDatabases: this.statsService.listDatabases.bind(this.statsService),
       };
 
+      this.pool = {
+        connect: this.scaleService.connectDB.bind(this.scaleService),
+        configure: this.scaleService.setDB.bind(this.scaleService),
+      };
+
       this.scale = {
         connectDB: this.scaleService.connectDB.bind(this.scaleService),
         setDB: this.scaleService.setDB.bind(this.scaleService),
+      };
+
+      this.actions = this.databaseActions.createActionsApi(
+        this.closeAllConnections.bind(this),
+        this.forceCloseAllConnections.bind(this),
+        this.closeDBstream.bind(this),
+        this.closeAllWatches.bind(this)
+      );
+
+      this.bulkTasks = {
+        copyDatabase: this.actions.copyDatabase,
+        dropDatabase: this.actions.dropDatabase,
+        export: this.actions.exportDB,
+        import: this.actions.importDB,
+        exportStream: this.actions.exportDBStream,
+        importStream: this.actions.importDBStream,
+      };
+
+      this.adv = {
+        mongoose,
+        getPrimaryConnection: () => this.sharedConnections.getPrimaryConnection(),
+        getOrCreatePrimaryConnection: () => this.sharedConnections.initPrimary(),
+        getConnection: (dbName?: string) =>
+          this.connectionManager.getConnection(dbName ?? this.defaultDB),
+        getSharedConnection: (dbName?: string) =>
+          this.sharedConnections.getSharedConnection(dbName ?? this.defaultDB),
       };
 
       this.logManager.log(
         `Creating PolyMongoWrapper with options: ${JSON.stringify(options)}`
       );
 
-      const coldStart = options.coldStart ?? true;
-
-      if (!coldStart) {
+      if (options.coldStart === false) {
         this.logManager.log("Eager initializing primary connection");
-        this.initPrimary();
+        this.sharedConnections.initPrimary();
       } else {
-        this.logManager.log(
-          "Cold start enabled - connection will initialize on first query"
-        );
+        this.logManager.log("Cold start enabled - connection will initialize on first query");
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
@@ -109,687 +173,120 @@ export class PolyMongoWrapper {
     }
   }
 
-  private initPrimary(): mongoose.Connection {
-    if (this.primaryConn) return this.primaryConn;
-    // Use ConnectionManager to init primary, but all DBs will share it
-    this.primaryConn = this.connectionManager.initPrimary();
-    this.logManager.log("Primary connection initialized for shared use");
-    return this.primaryConn;
+  public on<K extends PolyMongoEventName>(
+    eventName: K,
+    callback: (event: PolyMongoEventMap[K]) => void | Promise<void>
+  ): () => void {
+    return this.hookManager.on(eventName, callback);
   }
 
-  private getSharedConnection(dbName: string): mongoose.Connection {
-    const primary = this.initPrimary();
-    if (this.dbCache.has(dbName)) {
-      this.logManager.log(
-        `Using cached shared connection for database: ${dbName}`
-      );
-      return this.dbCache.get(dbName)!;
+  public async connect(): Promise<PolyMongoConnectResult> {
+    const existingState = this.getConnectionState();
+    const primary = this.sharedConnections.initPrimary();
+
+    if (primary.readyState === 1) {
+      return {
+        success: true,
+        alreadyConnected: true,
+        defaultDB: this.defaultDB,
+        connection: primary,
+        state: "connected",
+      };
     }
 
-    this.logManager.log(`Creating shared connection for database: ${dbName}`);
-    const dbConn = primary.useDb(dbName);
-    this.dbCache.set(dbName, dbConn);
-    return dbConn;
-  }
-
-  /**
-   * Registers a callback for when any database connection is established.
-   * @param callback - Function to execute on connection
-   */
-  public onDbConnect(callback: (db: mongoose.Connection) => void): void {
-    this.hookManager.onDbConnect(callback);
-  }
-
-  /**
-   * Registers a callback for when any database connection is closed.
-   * @param callback - Function to execute on disconnection
-   */
-  public onDbDisconnect(callback: (db: mongoose.Connection) => void): void {
-    this.hookManager.onDbDisconnect(callback);
-  }
-
-  /**
-   * Registers a callback for when specific databases connect.
-   * @param dbNames - List of database names to watch
-   * @param callback - Function to execute on connection
-   */
-  public onTheseDBConnect(
-    dbNames: string[],
-    callback: (db: mongoose.Connection) => void
-  ): void {
-    this.hookManager.onTheseDBConnect(dbNames, callback);
-  }
-
-  public onTheseDBDisconnect(
-    dbNames: string[],
-    callback: (db: mongoose.Connection) => void
-  ): void {
-    this.hookManager.onTheseDBDisconnect(dbNames, callback);
-  }
-
-  /**
-   * Wraps a Mongoose model to enable dynamic database switching.
-   * @param baseModel - The standard Mongoose model to wrap
-   * @returns A wrapped model with `.db()` capability
-   */
-  wrapModel<T>(
-    baseModel: mongoose.Model<T>
-  ): WrappedModel<T> {
-    const wrapper = this;
-
-    if (!baseModel || !baseModel.modelName || !baseModel.schema) {
-      throw new Error("Invalid model provided to wrapModel");
-    }
-
-    const getModelForDB = (dbName: string): mongoose.Model<T> => {
-      try {
-        wrapper.logManager.log(
-          `Accessing model ${baseModel.modelName} for database: ${dbName}`
-        );
-
-        // Force shared connection (bypasses ConnectionManager.getConnection)
-        const conn = wrapper.getSharedConnection(dbName);
-        const model = conn.model<T>(baseModel.modelName, baseModel.schema);
-
-        const originalWatch = model.watch.bind(model);
-        model.watch = function (...args: any[]) {
-          try {
-            const stream = originalWatch(...args);
-            wrapper.watchManager.addStream(dbName, stream);
-
-            stream.on("close", () => {
-              wrapper.watchManager.removeStream(dbName, stream);
-            });
-
-            stream.on("error", (error) => {
-              wrapper.logManager.log(
-                `Watch stream error for ${dbName}: ${error.message}`
-              );
-              wrapper.watchManager.removeStream(dbName, stream);
-            });
-
-            return stream;
-          } catch (error) {
-            const errorMsg =
-              error instanceof Error ? error.message : "Unknown error";
-            wrapper.logManager.log(
-              `Failed to create watch stream: ${errorMsg}`
-            );
-            throw new Error(`Failed to create watch stream: ${errorMsg}`);
-          }
-        } as any;
-
-        return model;
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        wrapper.logManager.log(
-          `Error accessing model ${baseModel.modelName} for ${dbName}: ${errorMsg}`
-        );
-        throw new Error(`Failed to access model: ${errorMsg}`);
-      }
-    };
-
-    // Create a Proxy that intercepts all property access
-    const wrappedModel = new Proxy(
-      {
-        db: (dbName?: string): mongoose.Model<T> => {
-          return getModelForDB(dbName ?? wrapper.defaultDB);
-        },
-      } as any,
-      {
-        get(target, prop) {
-          // If accessing 'db' method, return it
-          if (prop === "db") {
-            return target.db;
-          }
-
-          // For any other property/method, get the default model and access it
-          const defaultModel = getModelForDB(wrapper.defaultDB);
-          const value = (defaultModel as any)[prop];
-
-          // If it's a function, bind it to the model
-          if (typeof value === "function") {
-            return value.bind(defaultModel);
-          }
-
-          return value;
-        },
-      }
-    );
-
-    return wrappedModel as WrappedModel<T>;
-  }
-
-  private getPoolStats(conn: mongoose.Connection | null): any {
-    if (!conn) return null;
-    const client = conn.getClient() as any;
-    const pool = client?.s?.pool;
-    if (!pool) return null;
+    await waitForConnectionReady(primary);
 
     return {
-      totalConnections:
-        pool.totalConnectionCount ?? pool.totalCreatedConnectionCount ?? 0,
-      availableConnections:
-        pool.availableConnectionCount ?? pool.totalAvailableCount ?? 0,
-      inUseConnections: pool.inUseConnectionCount ?? pool.totalInUseCount ?? 0,
-      waitQueueSize:
-        pool.waitQueueSize ??
-        pool.waitingClientsCount ??
-        pool.waitQueueMemberCount ??
-        0,
-      maxPoolSize: pool.maxPoolSize ?? this.maxPoolSize ?? 0,
-      minPoolSize: pool.minPoolSize ?? this.minFreeConnections ?? 0,
-      maxIdleTimeMS: pool.maxIdleTimeMS ?? this.idleTimeoutMS,
+      success: true,
+      alreadyConnected: existingState === "connected",
+      defaultDB: this.defaultDB,
+      connection: primary,
+      state: "connected",
     };
   }
 
-  /**
-   * Checks if the primary connection is currently established.
-   * @returns True if connected, false otherwise
-   */
-  isConnected(): boolean {
+  public async disconnect(): Promise<PolyMongoDisconnectResult> {
+    const alreadyDisconnected =
+      !this.sharedConnections.getPrimaryConnection() && !this.connectionManager.primary;
+
+    await this.closeAllConnections();
+
+    return {
+      success: true,
+      alreadyDisconnected,
+      state: "disconnected",
+    };
+  }
+
+  public wrapModel<T>(baseModel: mongoose.Model<T>): WrappedModel<T> {
+    return this.modelWrapperService.wrapModel(baseModel) as WrappedModel<T>;
+  }
+
+  public isConnected(): boolean {
     return this.connectionManager.isConnected();
   }
 
-  /**
-   * Gets the current state of the primary connection.
-   * @returns Connection state ('connected', 'disconnected', etc.)
-   */
-  getConnectionState(): string {
+  public getConnectionState(): string {
     return this.connectionManager.getReadyState();
   }
 
-  /**
-   * Executes a function within a database transaction.
-   * Automatically handles sessions and rollbacks on error.
-   * @param fn - The function to execute within the transaction
-   * @param options - Optional Mongoose transaction options
-   * @returns The result of the executed function
-   */
-  async transaction<T>(
-    fn: (session: mongoose.ClientSession) => Promise<T>,
-    options?: mongoose.mongo.TransactionOptions
-  ): Promise<T> {
+  public ping(dbName?: string): Promise<PingResult> {
+    return this.databaseActions.ping(dbName);
+  }
+
+  private getPoolStats(conn: mongoose.Connection | null): any {
+    return getConnectionPoolSnapshot(conn, {
+      maxPoolSize: this.maxPoolSize,
+      minPoolSize: this.minFreeConnections,
+      maxIdleTimeMS: this.idleTimeoutMS,
+    });
+  }
+
+  private async closeAllConnections(): Promise<void> {
     try {
-      this.logManager.log("Starting transaction");
-      const primary = this.initPrimary();
-
-      // Check if replica set is available
-      let isReplicaSet = false;
-
-      if (primary.db) {
-        const admin = primary.db.admin();
-        try {
-          const status = await admin.command({ replSetGetStatus: 1 });
-          isReplicaSet = !!status;
-        } catch (e) {
-          this.logManager.log("Not a replica set, using manual transaction");
-        }
-      }
-
-      const session = await primary.startSession();
-
-      try {
-        if (isReplicaSet) {
-          // Use withTransaction for replica sets (auto-retry)
-          const result = await session.withTransaction(async () => {
-            return await fn(session);
-          }, options);
-          this.logManager.log("Transaction committed successfully");
-          return result;
-        } else {
-          // Manual transaction for standalone
-          session.startTransaction(options);
-          const result = await fn(session);
-          await session.commitTransaction();
-          this.logManager.log("Transaction committed successfully");
-          return result;
-        }
-      } catch (error) {
-        // Only abort if transaction is active
-        if (session.inTransaction()) {
-          await session.abortTransaction();
-        }
-        throw error;
-      } finally {
-        await session.endSession();
-      }
+      this.logManager.log("Actions closeAll called");
+      this.watchManager.closeAllWatches();
+      this.sharedConnections.clearCache();
+      await this.connectionManager.closeAll();
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      this.logManager.log(`Transaction failed: ${errorMsg}`);
-      throw new Error(`Transaction failed: ${errorMsg}`);
+      this.logManager.log(`Error in actions.closeAll: ${errorMsg}`);
+      throw new Error(`Failed to close connections: ${errorMsg}`);
     }
   }
 
-  /**
-   * Utility tasks for database maintenance and bulk data movement.
-   */
-  public bulkTasks = {
-    /**
-     * Copies all collections and indexes from one database to another.
-     * @param sourceDB - Name of the source database
-     * @param targetDB - Name of the target database
-     */
-    copyDatabase: async (sourceDB: string, targetDB: string): Promise<void> => {
-      try {
-        this.logManager.log(`Copying database from ${sourceDB} to ${targetDB}`);
+  private async forceCloseAllConnections(): Promise<void> {
+    try {
+      this.logManager.log("Actions forceCloseAll called");
+      this.watchManager.closeAllWatches();
+      this.sharedConnections.clearCache();
+      await this.connectionManager.forceCloseAll();
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      this.logManager.log(`Error in actions.forceCloseAll: ${errorMsg}`);
+      throw new Error(`Failed to force close connections: ${errorMsg}`);
+    }
+  }
 
-        const sourceConn = this.getSharedConnection(sourceDB);
-        const targetConn = this.getSharedConnection(targetDB);
+  private closeDBstream(dbName: string): void {
+    try {
+      this.logManager.log(`Actions closeDBstream called for ${dbName}`);
+      this.watchManager.closeDBstream(dbName);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      this.logManager.log(`Error closing DB stream: ${errorMsg}`);
+      throw new Error(`Failed to close database stream: ${errorMsg}`);
+    }
+  }
 
-        await new Promise<void>((resolve) => {
-          if (sourceConn.readyState === 1 && targetConn.readyState === 1) {
-            resolve();
-          } else {
-            const onOpen = () => {
-              if (sourceConn.readyState === 1 && targetConn.readyState === 1) {
-                resolve();
-              }
-            };
-            sourceConn.once("open", onOpen);
-            targetConn.once("open", onOpen);
-          }
-        });
-
-        if (!sourceConn.db || !targetConn.db) {
-          throw new Error("Database connection not ready");
-        }
-
-        const collections = await sourceConn.db.listCollections().toArray();
-
-        for (const collInfo of collections) {
-          const collName = collInfo.name;
-          this.logManager.log(`Copying collection: ${collName}`);
-
-          const docs = await sourceConn.db
-            .collection(collName)
-            .find({})
-            .toArray();
-
-          if (docs.length > 0) {
-            await targetConn.db.collection(collName).insertMany(docs);
-          }
-
-          const indexes = await sourceConn.db.collection(collName).indexes();
-          for (const index of indexes) {
-            if (index.name !== "_id_") {
-              const { name, ...indexSpec } = index;
-              await targetConn.db
-                .collection(collName)
-                .createIndex(indexSpec.key, { name, ...indexSpec });
-            }
-          }
-        }
-
-        this.logManager.log(`Database copied from ${sourceDB} to ${targetDB}`);
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error copying database: ${errorMsg}`);
-        throw new Error(`Failed to copy database: ${errorMsg}`);
-      }
-    },
-
-    /**
-     * Drops an entire database and cleans up associated resources.
-     * @param dbName - Name of the database to drop
-     */
-    dropDatabase: async (dbName: string): Promise<void> => {
-      try {
-        if (!dbName) {
-          throw new Error("Database name is required to drop a database");
-        }
-        this.logManager.log(`Dropping database: ${dbName}`);
-        const conn = this.getSharedConnection(dbName);
-        await conn.dropDatabase();
-        this.dbCache.delete(dbName); // Clear cache
-        this.watchManager.closeDBstream(dbName);
-        this.logManager.log(`Database ${dbName} dropped successfully`);
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error dropping database ${dbName}: ${errorMsg}`);
-        throw new Error(`Failed to drop database: ${errorMsg}`);
-      }
-    },
-
-    /**
-     * Exports an entire database's data and indexes to a JSON object.
-     * @param dbName - Name of the database to export
-     * @returns Object containing all database data
-     */
-    export: async (dbName: string): Promise<any> => {
-      try {
-        this.logManager.log(`Exporting database: ${dbName}`);
-
-        const conn = this.getSharedConnection(dbName);
-
-        await new Promise<void>((resolve) => {
-          if (conn.readyState === 1) {
-            resolve();
-          } else {
-            conn.once("open", () => resolve());
-          }
-        });
-
-        if (!conn.db) {
-          throw new Error("Database connection not ready");
-        }
-
-        const collections = await conn.db.listCollections().toArray();
-        const exportData: any = {
-          database: dbName,
-          exportDate: new Date().toISOString(),
-          collections: {},
-        };
-
-        for (const collInfo of collections) {
-          const collName = collInfo.name;
-          this.logManager.log(`Exporting collection: ${collName}`);
-
-          const docs = await conn.db.collection(collName).find({}).toArray();
-          const indexes = await conn.db.collection(collName).indexes();
-
-          exportData.collections[collName] = {
-            documents: docs,
-            indexes: indexes,
-          };
-        }
-
-        this.logManager.log(`Database ${dbName} exported successfully`);
-        return exportData;
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error exporting database: ${errorMsg}`);
-        throw new Error(`Failed to export database: ${errorMsg}`);
-      }
-    },
-
-    /**
-     * Imports data and indexes into a specified database.
-     * @param dbName - Name of the target database
-     * @param data - The data object to import (from export)
-     */
-    import: async (dbName: string, data: any): Promise<void> => {
-      try {
-        this.logManager.log(`Importing database to: ${dbName}`);
-
-        if (!data.collections || typeof data.collections !== "object") {
-          throw new Error("Invalid import data format");
-        }
-
-        const conn = this.getSharedConnection(dbName);
-
-        await new Promise<void>((resolve) => {
-          if (conn.readyState === 1) {
-            resolve();
-          } else {
-            conn.once("open", () => resolve());
-          }
-        });
-
-        if (!conn.db) {
-          throw new Error("Database connection not ready");
-        }
-
-        for (const [collName, collData] of Object.entries(
-          data.collections as any
-        )) {
-          this.logManager.log(`Importing collection: ${collName}`);
-
-          const { documents, indexes } = collData as any;
-
-          if (documents && documents.length > 0) {
-            await conn.db.collection(collName).insertMany(documents);
-          }
-
-          if (indexes && Array.isArray(indexes)) {
-            for (const index of indexes) {
-              if (index.name !== "_id_") {
-                const { name, ...indexSpec } = index;
-                await conn.db
-                  .collection(collName)
-                  .createIndex(indexSpec.key, { name, ...indexSpec });
-              }
-            }
-          }
-        }
-
-        this.logManager.log(`Database imported to ${dbName} successfully`);
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error importing database: ${errorMsg}`);
-        throw new Error(`Failed to import database: ${errorMsg}`);
-      }
-    },
-
-    /**
-     * Creates a readable stream of the entire database in JSON format.
-     * Ideal for large databases to avoid memory issues.
-     * @param dbName - Name of the database to export
-     * @returns A readable stream of database data
-     */
-    exportStream: (dbName: string): NodeJS.ReadableStream => {
-      const { Readable } = require("stream");
-
-      const stream = new Readable({
-        objectMode: false,
-        async read() {},
-      });
-
-      (async () => {
-        try {
-          this.logManager.log(`Starting stream export for: ${dbName}`);
-
-          const conn = this.getSharedConnection(dbName);
-
-          await new Promise<void>((resolve) => {
-            if (conn.readyState === 1) resolve();
-            else {
-              conn.once("open", () => resolve());
-            }
-          });
-
-          if (!conn.db) throw new Error("Database connection not ready");
-
-          // Start JSON structure
-          stream.push(
-            '{"database":"' +
-              dbName +
-              '","exportDate":"' +
-              new Date().toISOString() +
-              '","collections":{'
-          );
-
-          const collections = await conn.db.listCollections().toArray();
-
-          for (let i = 0; i < collections.length; i++) {
-            const collName = collections[i].name;
-            this.logManager.log(`Streaming collection: ${collName}`);
-
-            if (i > 0) stream.push(",");
-            stream.push('"' + collName + '":{"documents":[');
-
-            // Stream documents
-            const cursor = conn.db.collection(collName).find({});
-            let first = true;
-
-            for await (const doc of cursor) {
-              if (!first) stream.push(",");
-              stream.push(JSON.stringify(doc));
-              first = false;
-            }
-
-            stream.push('],"indexes":');
-            const indexes = await conn.db.collection(collName).indexes();
-            stream.push(JSON.stringify(indexes));
-            stream.push("}");
-          }
-
-          stream.push("}}");
-          stream.push(null);
-
-          this.logManager.log(`Stream export completed for: ${dbName}`);
-        } catch (error) {
-          const errorMsg =
-            error instanceof Error ? error.message : "Unknown error";
-          this.logManager.log(`Error in stream export: ${errorMsg}`);
-          stream.destroy(new Error(`Export stream failed: ${errorMsg}`));
-        }
-      })();
-
-      return stream;
-    },
-
-    importStream: async (
-      dbName: string,
-      stream: NodeJS.ReadableStream
-    ): Promise<void> => {
-      return new Promise(async (resolve, reject) => {
-        try {
-          this.logManager.log(`Starting stream import to: ${dbName}`);
-
-          const conn = this.getSharedConnection(dbName);
-
-          await new Promise<void>((resolveConn) => {
-            if (conn.readyState === 1) resolveConn();
-            else {
-              conn.once("open", () => resolveConn());
-            }
-          });
-
-          if (!conn.db) throw new Error("Database connection not ready");
-
-          let buffer = "";
-
-          stream.on("data", (chunk) => {
-            buffer += chunk.toString();
-          });
-
-          stream.on("end", async () => {
-            try {
-              const data = JSON.parse(buffer);
-
-              if (!data.collections || typeof data.collections !== "object") {
-                throw new Error("Invalid import data format");
-              }
-
-              for (const [collName, collData] of Object.entries(
-                data.collections as any
-              )) {
-                this.logManager.log(`Importing collection: ${collName}`);
-
-                const { documents, indexes } = collData as any;
-
-                if (documents && documents.length > 0) {
-                  // Insert in batches to handle large collections
-                  const batchSize = 1000;
-                  for (let i = 0; i < documents.length; i += batchSize) {
-                    const batch = documents.slice(i, i + batchSize);
-                    await conn.db!.collection(collName).insertMany(batch);
-                  }
-                }
-
-                if (indexes && Array.isArray(indexes)) {
-                  for (const index of indexes) {
-                    if (index.name !== "_id_") {
-                      const { name, ...indexSpec } = index;
-                      await conn
-                        .db!.collection(collName)
-                        .createIndex(indexSpec.key, { name, ...indexSpec });
-                    }
-                  }
-                }
-              }
-
-              this.logManager.log(`Stream import completed for: ${dbName}`);
-              resolve();
-            } catch (error) {
-              const errorMsg =
-                error instanceof Error ? error.message : "Unknown error";
-              this.logManager.log(
-                `Error processing import stream: ${errorMsg}`
-              );
-              reject(new Error(`Import stream failed: ${errorMsg}`));
-            }
-          });
-
-          stream.on("error", (error) => {
-            this.logManager.log(`Stream error: ${error.message}`);
-            reject(new Error(`Import stream failed: ${error.message}`));
-          });
-        } catch (error) {
-          const errorMsg =
-            error instanceof Error ? error.message : "Unknown error";
-          this.logManager.log(`Error in stream import: ${errorMsg}`);
-          reject(new Error(`Failed to import stream: ${errorMsg}`));
-        }
-      });
-    },
-  };
-
-  /**
-   * Lifecycle management actions for connections and streams.
-   */
-  public actions = {
-    /**
-     * Closes all active connections and watch streams gracefully.
-     */
-    closeAll: async (): Promise<void> => {
-      try {
-        this.logManager.log("Actions closeAll called");
-        this.watchManager.closeAllWatches();
-        this.dbCache.clear();
-        await this.connectionManager.closeAll();
-        this.primaryConn = undefined;
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error in actions.closeAll: ${errorMsg}`);
-        throw new Error(`Failed to close connections: ${errorMsg}`);
-      }
-    },
-
-    forceCloseAll: async (): Promise<void> => {
-      try {
-        this.logManager.log("Actions forceCloseAll called");
-        this.watchManager.closeAllWatches();
-        this.dbCache.clear();
-        await this.connectionManager.forceCloseAll();
-        this.primaryConn = undefined;
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error in actions.forceCloseAll: ${errorMsg}`);
-        throw new Error(`Failed to force close connections: ${errorMsg}`);
-      }
-    },
-
-    closeDBstream: (dbName: string): void => {
-      try {
-        this.logManager.log(`Actions closeDBstream called for ${dbName}`);
-        this.watchManager.closeDBstream(dbName);
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error closing DB stream: ${errorMsg}`);
-        throw new Error(`Failed to close database stream: ${errorMsg}`);
-      }
-    },
-
-    closeAllWatches: (): void => {
-      try {
-        this.logManager.log("Actions closeAllWatches called");
-        this.watchManager.closeAllWatches();
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : "Unknown error";
-        this.logManager.log(`Error closing watches: ${errorMsg}`);
-        throw new Error(`Failed to close watches: ${errorMsg}`);
-      }
-    },
-  };
+  private closeAllWatches(): void {
+    try {
+      this.logManager.log("Actions closeAllWatches called");
+      this.watchManager.closeAllWatches();
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      this.logManager.log(`Error closing watches: ${errorMsg}`);
+      throw new Error(`Failed to close watches: ${errorMsg}`);
+    }
+  }
 }

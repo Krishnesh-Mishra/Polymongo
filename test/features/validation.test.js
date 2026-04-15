@@ -56,6 +56,12 @@ async function run() {
             }, "Should throw for negative idleTimeoutMS");
         },
 
+        "createWrapper rejects negative retry": () => {
+            assertThrows(() => {
+                PolyMongo.createWrapper({ mongoURI, defaultDB: "test", retry: -1 });
+            }, "Should throw for negative retry");
+        },
+
         "createWrapper rejects minFreeConnections > maxPoolSize": () => {
             assertThrows(() => {
                 PolyMongo.createWrapper({
@@ -114,9 +120,25 @@ async function run() {
                 defaultDB: "test",
                 maxPoolSize: 50,
                 minFreeConnections: 5,
-                idleTimeoutMS: 30000
+                idleTimeoutMS: 30000,
+                retry: 3000
             });
             assert(w !== null, "Wrapper should be created with custom pool config");
+            w.actions.forceCloseAll().catch(() => { });
+        },
+
+        "wrapper exposes advanced helpers": () => {
+            const w = PolyMongo.createWrapper({
+                mongoURI,
+                defaultDB: "test"
+            });
+
+            assert(w.adv !== null, "adv should exist");
+            assert(typeof w.adv.getConnection === "function", "adv.getConnection should exist");
+            assert(typeof w.adv.getSharedConnection === "function", "adv.getSharedConnection should exist");
+            assert(typeof w.adv.getOrCreatePrimaryConnection === "function", "adv.getOrCreatePrimaryConnection should exist");
+            assert(w.adv.mongoose !== null, "adv.mongoose should exist");
+
             w.actions.forceCloseAll().catch(() => { });
         },
 

@@ -1,5 +1,5 @@
 // src/observability/database.metrics.ts
-import * as mongoose from "mongoose";
+import mongoose from "mongoose";
 import { LogManager } from "../infrastructure/logger.adapter";
 import { ConnectionManager } from "../lifecycle/connection.lifecycle";
 import { DbStats } from "../contracts/watch.contract";

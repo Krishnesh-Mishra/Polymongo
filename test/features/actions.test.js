@@ -43,7 +43,7 @@ async function run() {
             await Wrapped.deleteMany({});
 
             // Create a separate connection too
-            await wrapper.scale.connectDB(["test_action_sep"], {
+            await wrapper.pool.connect(["test_action_sep"], {
                 maxConnections: 2,
             });
 

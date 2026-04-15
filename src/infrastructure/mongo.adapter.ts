@@ -1,5 +1,5 @@
 // src/infrastructure/mongo.adapter.ts
-import * as mongoose from "mongoose";
+import mongoose from "mongoose";
 import { LogManager } from "./logger.adapter";
 import { PoolStats } from "../contracts/polymongo.contract";
 

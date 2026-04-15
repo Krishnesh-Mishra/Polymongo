@@ -13,7 +13,10 @@ const db = PolyMongo.createWrapper({
   mongoURI: "mongodb://localhost:27017",
   defaultDB: "production",
   maxPoolSize: 10,
-  debug: true,
+  debug: {
+    log: true,
+    logPath: "./logs/test-example",
+  },
 });
 
 // 3. Wrap your model

@@ -16,7 +16,12 @@ async function run() {
     const result = await runTestSuite("Observability & Metrics", {
 
         "setup: initialize wrapper and seed data": async () => {
-            wrapper = createWrapper({ debug: true, logPath: path.join(__dirname, "../../logs/test-observability") });
+            wrapper = createWrapper({
+                debug: {
+                    log: true,
+                    logPath: path.join(__dirname, "../../logs/test-observability"),
+                }
+            });
 
             const UserSchema = new mongoose.Schema({ name: String, email: String });
             const UserModel = mongoose.model("ObsUser", UserSchema);
@@ -56,8 +61,8 @@ async function run() {
             assertArray(stats.primary.sharedDatabases, "sharedDatabases should be an array");
         },
 
-        "stats.general() shows separate DB info after scale.connectDB": async () => {
-            await wrapper.scale.connectDB(["test_obs_separate"], {
+        "stats.general() shows separate DB info after pool.connect()": async () => {
+            await wrapper.pool.connect(["test_obs_separate"], {
                 maxConnections: 3,
             });
 
@@ -117,13 +122,23 @@ async function run() {
             logInfo(`Listed ${dbList.length} databases`);
         },
 
+        "ping() returns health info for default and named databases": async () => {
+            const defaultPing = await wrapper.ping();
+            const analyticsPing = await wrapper.ping(databases.analytics);
+
+            assertEqual(defaultPing.ok, true, "Default ping should succeed");
+            assertEqual(analyticsPing.ok, true, "Named ping should succeed");
+            assertType(defaultPing.latency, "number", "Latency should be numeric");
+            assertType(analyticsPing.latency, "number", "Named latency should be numeric");
+        },
+
         "debug mode creates log files": async () => {
             // Give some time for logs to flush
             await sleep(500);
 
             const logDir = path.join(__dirname, "../../logs/test-observability");
             const exists = fs.existsSync(logDir);
-            assert(exists, "Log directory should be created when debug=true");
+            assert(exists, "Log directory should be created when debug.log=true and debug.logPath is set");
 
             if (exists) {
                 const files = fs.readdirSync(logDir);

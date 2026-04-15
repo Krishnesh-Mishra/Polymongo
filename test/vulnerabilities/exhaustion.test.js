@@ -25,7 +25,7 @@ async function run() {
             }
 
             for (const name of dbNames) {
-                await wrapper.scale.connectDB([name], { maxConnections: 2 });
+                await wrapper.pool.connect([name], { maxConnections: 2 });
             }
 
             const stats = wrapper.stats.general();
@@ -39,7 +39,7 @@ async function run() {
             const promises = [];
             for (let i = 0; i < 5; i++) {
                 promises.push(
-                    wrapper.scale.connectDB([`test_exhaust_par_${i}`], { maxConnections: 2 })
+                    wrapper.pool.connect([`test_exhaust_par_${i}`], { maxConnections: 2 })
                 );
             }
 
@@ -109,11 +109,11 @@ async function run() {
         },
 
         "connectDB with same name twice does not create duplicate pools": async () => {
-            await wrapper.scale.connectDB(["test_exhaust_dup"], { maxConnections: 3 });
+            await wrapper.pool.connect(["test_exhaust_dup"], { maxConnections: 3 });
             const stats1 = wrapper.stats.general();
             const countBefore = stats1.separateDB.filter(s => s.dbName === "test_exhaust_dup").length;
 
-            await wrapper.scale.connectDB(["test_exhaust_dup"], { maxConnections: 3 });
+            await wrapper.pool.connect(["test_exhaust_dup"], { maxConnections: 3 });
             const stats2 = wrapper.stats.general();
             const countAfter = stats2.separateDB.filter(s => s.dbName === "test_exhaust_dup").length;
 

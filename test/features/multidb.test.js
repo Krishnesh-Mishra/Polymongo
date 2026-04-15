@@ -133,8 +133,8 @@ async function run() {
             await WrappedLog.db(databases.archive).deleteMany({});
         },
 
-        "scale.setDB() with dbSpecific config works": async () => {
-            wrapper.scale.setDB([databases.staging], {
+        "pool.configure() with dbSpecific config works": async () => {
+            wrapper.pool.configure([databases.staging], {
                 maxConnections: 3,
                 coldStart: true,
             });

@@ -1,5 +1,5 @@
 // src/contracts/connection.contract.ts
-import * as mongoose from "mongoose";
+import mongoose from "mongoose";
 
 /**
  * Specific configuration for a single database.

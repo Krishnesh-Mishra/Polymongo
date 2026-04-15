@@ -1,11 +1,12 @@
 {
   "name": "polymongo",
-  "version": "1.2.7",
+  "version": "1.3.0",
   "description": "Adaptive Multi-Database Wrapper for Mongoose with automatic connection management",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "rimraf dist && tsc",
+    "build": "rimraf dist && tsup src/index.ts --format cjs --dts --minify --sourcemap --external mongoose,mongodb,winston",
+    "build:dev": "tsup src/index.ts --format cjs --dts --watch",
     "prepublishOnly": "npm run build",
     "test": "node test/index.js",
     "exServer": "nodemon examples/server.js",
@@ -59,5 +60,17 @@
   "bugs": {
     "url": "https://github.com/Krishnesh-Mishra/polymongo/issues"
   },
-  "homepage": "https://github.com/Krishnesh-Mishra/polymongo#readme"
+  "homepage": "https://github.com/Krishnesh-Mishra/polymongo#readme",
+  "ai": {
+    "usage": "Use the PolyMongo wrapper instead of creating direct mongoose connections for shared multi-database access, pooling, stats, and database actions.",
+    "example": "const wrapper = PolyMongo.createWrapper({ mongoURI: 'mongodb://localhost:27017', defaultDB: 'app' }); const User = wrapper.wrapModel(mongoose.model('User', userSchema)); await wrapper.connect(); await wrapper.pool.configure(['analytics'], { maxConnections: 20 }); const results = await User.db('analytics').find();",
+    "patterns": [
+      "wrapper.connect()",
+      "wrapper.pool.configure(['analytics'], { maxConnections: 20 })",
+      "wrapper.pool.connect(['reporting'])",
+      "await wrapper.ping()",
+      "await wrapper.stats.db('analytics')",
+      "const stream = wrapper.actions.exportDBStream('analytics')"
+    ]
+  }
 }

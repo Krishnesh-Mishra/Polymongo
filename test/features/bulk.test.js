@@ -37,8 +37,8 @@ async function run() {
             logInfo(`Seeded ${count} products into ${databases.bulkSource}`);
         },
 
-        "bulkTasks.export() returns valid export object": async () => {
-            const exported = await wrapper.bulkTasks.export(databases.bulkSource);
+        "actions.exportDB() returns valid export object": async () => {
+            const exported = await wrapper.actions.exportDB(databases.bulkSource);
 
             assertExists(exported, "Export data should exist");
             assertHasProperty(exported, "database", "Should have database field");
@@ -50,15 +50,21 @@ async function run() {
             logInfo(`Exported ${Object.keys(exported.collections).length} collection(s) from ${databases.bulkSource}`);
         },
 
-        "bulkTasks.import() restores data into new database": async () => {
-            // First export
+        "bulkTasks alias remains compatible with actions API": async () => {
             const exported = await wrapper.bulkTasks.export(databases.bulkSource);
+            assertExists(exported, "Legacy bulkTasks export alias should still work");
+            assertEqual(exported.database, databases.bulkSource, "Legacy bulkTasks alias should target the requested DB");
+        },
+
+        "actions.importDB() restores data into new database": async () => {
+            // First export
+            const exported = await wrapper.actions.exportDB(databases.bulkSource);
 
             // Clean target
-            try { await wrapper.bulkTasks.dropDatabase(databases.bulkTarget); } catch (e) { /* OK */ }
+            try { await wrapper.actions.dropDatabase(databases.bulkTarget); } catch (e) { /* OK */ }
 
             // Import into target
-            await wrapper.bulkTasks.import(databases.bulkTarget, exported);
+            await wrapper.actions.importDB(databases.bulkTarget, exported);
 
             // Verify data
             const ProductSchema2 = new mongoose.Schema({
@@ -74,7 +80,7 @@ async function run() {
             logInfo(`Imported ${count} documents into ${databases.bulkTarget}`);
         },
 
-        "bulkTasks.import() preserves data integrity": async () => {
+        "actions.importDB() preserves data integrity": async () => {
             const ProductSchema3 = new mongoose.Schema({
                 sku: String, name: String, price: Number, category: String, stock: Number
             }, { collection: "bulkproducts" });
@@ -89,7 +95,7 @@ async function run() {
             assertEqual(mouse.price, 29.99, "Product price should match");
         },
 
-        "bulkTasks.copyDatabase() copies all data and indexes": async () => {
+        "actions.copyDatabase() copies all data and indexes": async () => {
             // Seed source
             const CopySchema = new mongoose.Schema({ key: String, value: Number });
             const CopyModel = mongoose.model("BulkCopy", CopySchema);
@@ -103,8 +109,8 @@ async function run() {
             ]);
 
             // Copy
-            try { await wrapper.bulkTasks.dropDatabase(databases.copyTarget); } catch (e) { /* OK */ }
-            await wrapper.bulkTasks.copyDatabase(databases.copySource, databases.copyTarget);
+            try { await wrapper.actions.dropDatabase(databases.copyTarget); } catch (e) { /* OK */ }
+            await wrapper.actions.copyDatabase(databases.copySource, databases.copyTarget);
 
             // Verify
             const CopySchema2 = new mongoose.Schema({ key: String, value: Number }, { collection: "bulkcopies" });
@@ -121,7 +127,7 @@ async function run() {
             logInfo("Database copy verified with data integrity");
         },
 
-        "bulkTasks.dropDatabase() removes database": async () => {
+        "actions.dropDatabase() removes database": async () => {
             // Create a temporary database
             const DropSchema = new mongoose.Schema({ temp: Boolean });
             const DropModel = mongoose.model("BulkDrop", DropSchema);
@@ -133,7 +139,7 @@ async function run() {
             assertEqual(count, 1, "Temp DB should have 1 document before drop");
 
             // Drop it
-            await wrapper.bulkTasks.dropDatabase(databases.temp);
+            await wrapper.actions.dropDatabase(databases.temp);
 
             // Verify it's empty
             const DropModel2 = mongoose.model("BulkDrop2", DropSchema);
@@ -144,8 +150,8 @@ async function run() {
             logInfo("Database drop verified");
         },
 
-        "bulkTasks.exportStream() produces valid JSON stream": async () => {
-            const stream = wrapper.bulkTasks.exportStream(databases.bulkSource);
+        "actions.exportDBStream() produces valid NDJSON stream": async () => {
+            const stream = wrapper.actions.exportDBStream(databases.bulkSource);
             assertExists(stream, "Export stream should exist");
 
             // Collect stream data
@@ -156,21 +162,26 @@ async function run() {
                 stream.on("error", reject);
             });
 
-            const jsonString = chunks.join("");
-            assert(jsonString.length > 0, "Stream should produce data");
+            const payload = chunks.join("");
+            assert(payload.length > 0, "Stream should produce data");
 
-            // Verify it's valid JSON
-            const parsed = JSON.parse(jsonString);
-            assertHasProperty(parsed, "database", "Stream JSON should have database");
-            assertHasProperty(parsed, "collections", "Stream JSON should have collections");
-            assertEqual(parsed.database, databases.bulkSource, "Database name should match");
+            const lines = payload.trim().split(/\r?\n/);
+            assertGreaterThan(lines.length, 1, "NDJSON stream should contain multiple records");
 
-            logInfo(`Stream export produced ${jsonString.length} bytes of valid JSON`);
+            const meta = JSON.parse(lines[0]);
+            assertEqual(meta.type, "meta", "First NDJSON record should be meta");
+            assertEqual(meta.format, "polymongo.ndjson", "Stream format should match");
+            assertEqual(meta.database, databases.bulkSource, "Database name should match");
+
+            const hasDocumentRecord = lines.some((line) => JSON.parse(line).type === "document");
+            assert(hasDocumentRecord, "NDJSON stream should include document records");
+
+            logInfo(`Stream export produced ${lines.length} NDJSON records`);
         },
 
-        "bulkTasks.importStream() restores data from stream": async () => {
+        "actions.importDBStream() restores data from stream": async () => {
             // First export via stream
-            const exportStream = wrapper.bulkTasks.exportStream(databases.bulkSource);
+            const exportStream = wrapper.actions.exportDBStream(databases.bulkSource);
             const exportChunks = [];
             await new Promise((resolve, reject) => {
                 exportStream.on("data", (chunk) => exportChunks.push(chunk.toString()));
@@ -180,7 +191,7 @@ async function run() {
             const jsonData = exportChunks.join("");
 
             // Clean target
-            try { await wrapper.bulkTasks.dropDatabase(databases.streamTarget); } catch (e) { /* OK */ }
+            try { await wrapper.actions.dropDatabase(databases.streamTarget); } catch (e) { /* OK */ }
 
             // Create an import stream from the JSON
             const importStream = new Readable();
@@ -188,7 +199,7 @@ async function run() {
             importStream.push(null);
 
             // Import via stream
-            await wrapper.bulkTasks.importStream(databases.streamTarget, importStream);
+            const importSummary = await wrapper.actions.importDBStream(databases.streamTarget, importStream);
 
             // Verify data
             const StreamSchema = new mongoose.Schema({
@@ -199,24 +210,25 @@ async function run() {
             const count = await WrappedStream.db(databases.streamTarget).countDocuments();
             assertGreaterThanOrEqual(count, productsData.length,
                 "Stream-imported DB should have correct document count");
+            assertEqual(importSummary.failures.length, 0, "NDJSON import should complete without collection failures");
 
             logInfo(`Stream import verified: ${count} documents in ${databases.streamTarget}`);
         },
 
-        "bulkTasks.import() rejects invalid data format": async () => {
+        "actions.importDB() rejects invalid data format": async () => {
             let threw = false;
             try {
-                await wrapper.bulkTasks.import(databases.temp, { invalid: "data" });
+                await wrapper.actions.importDB(databases.temp, { invalid: "data" });
             } catch (e) {
                 threw = true;
             }
             assert(threw, "Import should throw for invalid data format");
         },
 
-        "bulkTasks.dropDatabase() rejects empty database name": async () => {
+        "actions.dropDatabase() rejects empty database name": async () => {
             let threw = false;
             try {
-                await wrapper.bulkTasks.dropDatabase("");
+                await wrapper.actions.dropDatabase("");
             } catch (e) {
                 threw = true;
             }
@@ -230,7 +242,7 @@ async function run() {
                 databases.streamTarget, databases.temp,
             ];
             for (const db of dbsToClean) {
-                try { await wrapper.bulkTasks.dropDatabase(db); } catch (e) { /* OK */ }
+                try { await wrapper.actions.dropDatabase(db); } catch (e) { /* OK */ }
             }
             await cleanupWrapper(wrapper);
             wrapper = null;

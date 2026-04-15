@@ -1,5 +1,5 @@
 // src/observability/metrics.collector.ts
-import * as mongoose from "mongoose";
+import mongoose from "mongoose";
 import { ConnectionManager } from "../lifecycle/connection.lifecycle";
 import { LogManager } from "../infrastructure/logger.adapter";
 import { ConnectionStats } from "../contracts/connection.contract";

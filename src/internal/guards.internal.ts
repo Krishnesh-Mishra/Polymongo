@@ -40,10 +40,48 @@ export function validateOptions(options: PolyMongoOptions): void {
   }
 
   if (
+    options.retry !== undefined &&
+    (typeof options.retry !== "number" || options.retry < 0)
+  ) {
+    throw new Error("retry must be a non-negative number");
+  }
+
+  if (
     options.minFreeConnections !== undefined &&
     options.maxPoolSize !== undefined &&
     options.minFreeConnections > options.maxPoolSize
   ) {
     throw new Error("minFreeConnections cannot be greater than maxPoolSize");
+  }
+
+  if (options.debug !== undefined && typeof options.debug !== "boolean") {
+    if (typeof options.debug !== "object" || options.debug === null) {
+      throw new Error("debug must be a boolean or an object");
+    }
+
+    if (
+      options.debug.log !== undefined &&
+      typeof options.debug.log !== "boolean"
+    ) {
+      throw new Error("debug.log must be a boolean");
+    }
+
+    if (
+      options.debug.logPath !== undefined &&
+      typeof options.debug.logPath !== "string"
+    ) {
+      throw new Error("debug.logPath must be a string");
+    }
+
+    if (
+      options.debug.logHandler !== undefined &&
+      typeof options.debug.logHandler !== "function"
+    ) {
+      throw new Error("debug.logHandler must be a function");
+    }
+  }
+
+  if (options.logPath !== undefined && typeof options.logPath !== "string") {
+    throw new Error("logPath must be a string");
   }
 }
